@@ -24,3 +24,4 @@ data/cookies.json
 # Frontend
 node_modules/
 frontend/dist/
+student/dist/

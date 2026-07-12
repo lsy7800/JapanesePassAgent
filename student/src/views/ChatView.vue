@@ -10,7 +10,7 @@ const EXAMPLES = [
   '给我看1道关于条件表达的题',
 ]
 
-const messages = ref([]) // { role: 'user'|'assistant', content, tools?: [] }
+const messages = ref([])
 const input = ref('')
 const sending = ref(false)
 const sessionId = ref(null)
@@ -51,7 +51,6 @@ async function send(text) {
 }
 
 function onKeydown(e) {
-  // Enter 发送，Shift+Enter 换行
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     send()
@@ -185,7 +184,6 @@ function newSession() {
 .chat-input .el-textarea {
   flex: 1;
 }
-/* Markdown 渲染样式 */
 .md :deep(table) {
   border-collapse: collapse;
   margin: 8px 0;

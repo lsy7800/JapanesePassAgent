@@ -1,23 +1,24 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Collection } from '@element-plus/icons-vue'
+import { EditPen, ChatDotRound } from '@element-plus/icons-vue'
 
 const route = useRoute()
-const activeMenu = computed(() => {
-  if (route.path.startsWith('/questions') || route.path === '/') return '/'
-  return route.path
-})
+const activeMenu = computed(() => route.path)
 </script>
 
 <template>
   <el-container class="app-container">
     <el-aside width="200px" class="app-aside">
-      <div class="brand">JLPT 管理后台</div>
+      <div class="brand">JLPT 学习系统</div>
       <el-menu :default-active="activeMenu" router class="aside-menu">
-        <el-menu-item index="/">
-          <el-icon><Collection /></el-icon>
-          <span>题库管理</span>
+        <el-menu-item index="/exam">
+          <el-icon><EditPen /></el-icon>
+          <span>在线考试</span>
+        </el-menu-item>
+        <el-menu-item index="/chat">
+          <el-icon><ChatDotRound /></el-icon>
+          <span>AI 助手</span>
         </el-menu-item>
       </el-menu>
     </el-aside>

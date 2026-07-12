@@ -18,7 +18,7 @@ const config = reactive({
   level: 'N1',
   types: [],
   total_questions: 5,
-  difficulty_range: null, // [min,max] 或 null
+  difficulty_range: null,
   time_limit_minutes: 0,
 })
 const useDifficulty = ref(false)
@@ -26,11 +26,10 @@ const diffMin = ref(1)
 const diffMax = ref(9)
 
 const loading = ref(false)
-const exam = ref(null) // 组卷返回
-const answers = reactive({}) // seq -> 'a'/'b'/'c'/'d'
+const exam = ref(null)
+const answers = reactive({})
 const result = ref(null)
 
-// 倒计时
 const remaining = ref(0)
 let timer = null
 
@@ -113,7 +112,6 @@ async function doSubmit() {
   stopTimer()
   const payload = Object.entries(answers).map(([seq, answer]) => ({ seq: Number(seq), answer }))
   if (payload.length === 0) {
-    // 后端要求 answers 非空；全未答时补一个占位以拿到全错结果
     ElMessage.info('未作答任何题目')
   }
   loading.value = true
