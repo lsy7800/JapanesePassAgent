@@ -16,6 +16,7 @@ from backend.schemas.question import (
     QuestionGroupSummary,
     QuestionListResponse,
     QuestionOut,
+    SourceStat,
 )
 
 router = APIRouter(prefix="/api/v1", tags=["questions"])
@@ -33,6 +34,20 @@ def _parse_knowledge_points(raw) -> list:
         return []
 
 
+@router.get("/sources", response_model=list[SourceStat])
+def list_sources(conn=Depends(get_db)):
+    """列出各题库批次及其题组数，供前端批次筛选下拉使用。source 为 NULL 的（API 手动创建）归并为 'manual'。"""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """SELECT COALESCE(source, 'manual') AS source, COUNT(*) AS count
+               FROM question_groups
+               GROUP BY COALESCE(source, 'manual')
+               ORDER BY source"""
+        )
+        rows = cursor.fetchall()
+    return [SourceStat(source=r["source"], count=r["count"]) for r in rows]
+
+
 @router.get("/questions", response_model=QuestionListResponse)
 def list_questions(
     type: str | None = Query(default=None, description="题型：single_choice/cloze/reading"),
@@ -40,6 +55,7 @@ def list_questions(
     difficulty_min: int | None = Query(default=None, ge=0, le=9),
     difficulty_max: int | None = Query(default=None, ge=0, le=9),
     knowledge_point: str | None = Query(default=None, description="知识点关键词"),
+    source: str | None = Query(default=None, description="题库批次来源，如 result_67_validated"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     conn=Depends(get_db),
@@ -61,6 +77,9 @@ def list_questions(
     if knowledge_point:
         where.append("JSON_CONTAINS(knowledge_points, %s)")
         params.append(json.dumps(knowledge_point, ensure_ascii=False))
+    if source:
+        where.append("source = %s")
+        params.append(source)
 
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
 
@@ -70,7 +89,7 @@ def list_questions(
 
         offset = (page - 1) * page_size
         cursor.execute(
-            f"""SELECT id, type, level, exam_date, difficulty, knowledge_points
+            f"""SELECT id, type, level, exam_date, difficulty, knowledge_points, source
                 FROM question_groups {where_sql}
                 ORDER BY id
                 LIMIT %s OFFSET %s""",
@@ -86,6 +105,7 @@ def list_questions(
             exam_date=r["exam_date"] or "",
             difficulty=r["difficulty"] or 0,
             knowledge_points=_parse_knowledge_points(r["knowledge_points"]),
+            source=r["source"],
         )
         for r in rows
     ]

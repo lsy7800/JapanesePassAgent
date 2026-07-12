@@ -48,6 +48,7 @@ class QuestionGroupSummary(BaseModel):
     exam_date: str = ""
     difficulty: int = 0
     knowledge_points: list[str] = Field(default_factory=list)
+    source: str | None = None
 
 
 class QuestionListResponse(BaseModel):
@@ -55,6 +56,12 @@ class QuestionListResponse(BaseModel):
     page: int
     page_size: int
     total: int
+
+
+class SourceStat(BaseModel):
+    """题库批次统计（GET /sources）。"""
+    source: str = Field(description="来源标识，如 result_67_validated")
+    count: int = Field(description="该批次题组数")
 
 
 # ========== 写接口输入模型 ==========

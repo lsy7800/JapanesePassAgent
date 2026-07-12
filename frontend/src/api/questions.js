@@ -39,3 +39,8 @@ export function updateQuestion(groupId, payload) {
 export function deleteQuestion(groupId) {
   return http.delete(`/questions/${groupId}`)
 }
+
+/** 题库批次列表及各自题数 */
+export function listSources() {
+  return http.get('/sources').then((r) => r.data)
+}

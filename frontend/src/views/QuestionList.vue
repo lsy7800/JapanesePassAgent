@@ -2,7 +2,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { listQuestions, deleteQuestion } from '../api/questions'
+import { listQuestions, deleteQuestion, listSources } from '../api/questions'
 
 const router = useRouter()
 
@@ -13,7 +13,10 @@ const TYPE_OPTIONS = [
 ]
 const LEVEL_OPTIONS = ['N1', 'N2', 'N3', 'N4', 'N5']
 
+const sources = ref([]) // [{ source, count }]
+
 const filters = reactive({
+  source: '',
   type: '',
   level: '',
   difficulty_min: null,
@@ -52,6 +55,7 @@ function onSearch() {
 }
 
 function onReset() {
+  filters.source = ''
   filters.type = ''
   filters.level = ''
   filters.difficulty_min = null
@@ -91,13 +95,40 @@ async function onDelete(row) {
   }
 }
 
-onMounted(load)
+async function loadSources() {
+  try {
+    sources.value = await listSources()
+  } catch {
+    // 批次统计失败不阻塞主列表
+  }
+}
+
+// 切换批次时立即重新查询（下拉即筛选，无需再点查询）
+function onSourceChange() {
+  page.value = 1
+  load()
+}
+
+onMounted(() => {
+  loadSources()
+  load()
+})
 </script>
 
 <template>
   <div>
     <el-card shadow="never" class="filter-card">
       <el-form :inline="true" :model="filters">
+        <el-form-item label="批次">
+          <el-select v-model="filters.source" placeholder="全部批次" clearable style="width: 220px" @change="onSourceChange">
+            <el-option
+              v-for="s in sources"
+              :key="s.source"
+              :label="`${s.source}（${s.count}题）`"
+              :value="s.source"
+            />
+          </el-select>
+        </el-form-item>
         <el-form-item label="题型">
           <el-select v-model="filters.type" placeholder="全部" clearable style="width: 140px">
             <el-option v-for="t in TYPE_OPTIONS" :key="t.value" :label="t.label" :value="t.value" />
@@ -125,6 +156,7 @@ onMounted(load)
 
     <el-table :data="rows" v-loading="loading" border stripe style="margin-top: 16px">
       <el-table-column prop="id" label="ID" width="80" />
+      <el-table-column prop="source" label="批次" width="180" show-overflow-tooltip />
       <el-table-column label="题型" width="110">
         <template #default="{ row }">{{ typeLabel(row.type) }}</template>
       </el-table-column>
