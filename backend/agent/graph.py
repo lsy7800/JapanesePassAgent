@@ -1,8 +1,15 @@
 """LangGraph ReAct Agent —— JLPT 学习辅导。
 
-用 DeepSeek（OpenAI 兼容）作为 LLM，绑定 3 个工具（查题/组卷/语法讲解），
+用 DeepSeek（OpenAI 兼容）作为 LLM，绑定工具集，
 create_react_agent 驱动工具调用循环，MemorySaver 按 session_id 保存多轮对话记忆。
+
+提供两种运行模式：
+- run_agent()       同步调用，返回完整回复
+- stream_agent()    异步生成器，逐 token/事件 yield，供 SSE 端点使用
 """
+import json
+from typing import AsyncGenerator
+
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
@@ -55,6 +62,49 @@ def get_agent():
     if _agent is None:
         _agent = _build_agent()
     return _agent
+
+
+async def stream_agent(
+    message: str, session_id: str, context: dict | None = None
+) -> AsyncGenerator[str, None]:
+    """异步生成器，逐步 yield SSE 格式字符串。
+
+    事件类型：
+    - data: {"type": "token",   "content": "..."}   LLM 输出的文字片段
+    - data: {"type": "tool",    "name": "...", "args": {...}}  工具调用开始
+    - data: {"type": "done",    "session_id": "..."}  流结束
+    - data: {"type": "error",   "detail": "..."}     异常
+    """
+    agent = get_agent()
+    user_content = message
+    if context:
+        user_content = f"{message}\n\n（上下文：{context}）"
+
+    config = {"configurable": {"thread_id": session_id}}
+    inputs = {"messages": [HumanMessage(content=user_content)]}
+
+    try:
+        async for event in agent.astream_events(inputs, config=config, version="v2"):
+            kind = event["event"]
+
+            # LLM 文字 token
+            if kind == "on_chat_model_stream":
+                chunk = event["data"].get("chunk")
+                if chunk and hasattr(chunk, "content") and chunk.content:
+                    text = chunk.content if isinstance(chunk.content, str) else ""
+                    if text:
+                        yield f"data: {json.dumps({'type': 'token', 'content': text}, ensure_ascii=False)}\n\n"
+
+            # 工具调用开始
+            elif kind == "on_tool_start":
+                tool_name = event.get("name", "")
+                tool_input = event["data"].get("input", {})
+                yield f"data: {json.dumps({'type': 'tool', 'name': tool_name, 'args': tool_input}, ensure_ascii=False)}\n\n"
+
+    except Exception as e:
+        yield f"data: {json.dumps({'type': 'error', 'detail': str(e)}, ensure_ascii=False)}\n\n"
+    finally:
+        yield f"data: {json.dumps({'type': 'done', 'session_id': session_id}, ensure_ascii=False)}\n\n"
 
 
 def run_agent(message: str, session_id: str, context: dict | None = None) -> dict:

@@ -2,7 +2,7 @@
 import { ref, nextTick } from 'vue'
 import { marked } from 'marked'
 import { ElMessage } from 'element-plus'
-import { chat } from '../api/agent'
+import { chatStream } from '../api/agent'
 
 const EXAMPLES = [
   '帮我出2道N1的题',
@@ -15,6 +15,11 @@ const input = ref('')
 const sending = ref(false)
 const sessionId = ref(null)
 const listRef = ref(null)
+
+// 当前流式消息索引，-1 表示没有进行中的消息
+let streamingIdx = -1
+// 关闭当前 SSE 连接的函数
+let closeStream = null
 
 function renderMd(text) {
   return marked.parse(text || '')
@@ -30,24 +35,40 @@ async function send(text) {
   const msg = (text ?? input.value).trim()
   if (!msg || sending.value) return
   input.value = ''
+
   messages.value.push({ role: 'user', content: msg })
   scrollBottom()
 
+  // 占位 assistant 消息，流式内容追加到这里
+  messages.value.push({ role: 'assistant', content: '', tools: [], streaming: true })
+  streamingIdx = messages.value.length - 1
   sending.value = true
-  try {
-    const data = await chat(msg, sessionId.value)
-    sessionId.value = data.session_id
-    messages.value.push({
-      role: 'assistant',
-      content: data.reply,
-      tools: (data.tool_calls || []).map((t) => t.tool),
-    })
-    scrollBottom()
-  } catch (e) {
-    ElMessage.error('对话失败：' + (e.response?.data?.detail || e.message))
-  } finally {
-    sending.value = false
-  }
+
+  closeStream = chatStream(msg, sessionId.value, {
+    onToken(content) {
+      messages.value[streamingIdx].content += content
+      scrollBottom()
+    },
+    onTool(name) {
+      messages.value[streamingIdx].tools.push(name)
+    },
+    onDone(sid) {
+      sessionId.value = sid
+      messages.value[streamingIdx].streaming = false
+      streamingIdx = -1
+      closeStream = null
+      sending.value = false
+      scrollBottom()
+    },
+    onError(detail) {
+      messages.value[streamingIdx].streaming = false
+      messages.value[streamingIdx].error = true
+      streamingIdx = -1
+      closeStream = null
+      sending.value = false
+      ElMessage.error('对话失败：' + detail)
+    },
+  })
 }
 
 function onKeydown(e) {
@@ -58,8 +79,12 @@ function onKeydown(e) {
 }
 
 function newSession() {
+  closeStream?.()
+  closeStream = null
   messages.value = []
   sessionId.value = null
+  sending.value = false
+  streamingIdx = -1
 }
 </script>
 
@@ -79,17 +104,20 @@ function newSession() {
       </div>
 
       <div v-for="(m, i) in messages" :key="i" class="msg-row" :class="m.role">
-        <div class="bubble">
+        <div class="bubble" :class="{ error: m.error }">
           <div v-if="m.role === 'assistant'" class="md" v-html="renderMd(m.content)"></div>
           <span v-else>{{ m.content }}</span>
+
+          <!-- 流式光标 -->
+          <span v-if="m.streaming" class="cursor">▍</span>
+
+          <!-- 工具调用标签 -->
           <div v-if="m.tools && m.tools.length" class="tools">
-            <el-tag v-for="(t, ti) in m.tools" :key="ti" size="small" type="info" effect="plain">🔧 {{ t }}</el-tag>
+            <el-tag v-for="(t, ti) in m.tools" :key="ti" size="small" type="info" effect="plain">
+              🔧 {{ t }}
+            </el-tag>
           </div>
         </div>
-      </div>
-
-      <div v-if="sending" class="msg-row assistant">
-        <div class="bubble typing">思考中…</div>
       </div>
     </div>
 
@@ -100,6 +128,7 @@ function newSession() {
         :rows="2"
         resize="none"
         placeholder="输入问题，Enter 发送，Shift+Enter 换行"
+        :disabled="sending"
         @keydown="onKeydown"
       />
       <el-button type="primary" :loading="sending" @click="send()">发送</el-button>
@@ -166,8 +195,20 @@ function newSession() {
   background: #f4f4f5;
   color: #303133;
 }
-.bubble.typing {
-  color: #999;
+.bubble.error {
+  background: #fef0f0;
+  color: #f56c6c;
+}
+.cursor {
+  display: inline-block;
+  animation: blink 0.8s step-end infinite;
+  color: #409eff;
+  font-weight: 700;
+  margin-left: 1px;
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
 }
 .tools {
   margin-top: 8px;
