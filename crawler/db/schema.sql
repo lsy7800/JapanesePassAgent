@@ -39,3 +39,29 @@ CREATE TABLE IF NOT EXISTS options (
     INDEX idx_question_id (question_id),
     FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='选项表';
+
+-- 考试试卷表：一次组卷生成一条记录
+CREATE TABLE IF NOT EXISTS exams (
+    id           INT PRIMARY KEY AUTO_INCREMENT,
+    level        VARCHAR(10) DEFAULT '' COMMENT '组卷时的目标级别',
+    total        INT NOT NULL DEFAULT 0 COMMENT '试卷题目数',
+    time_limit   INT DEFAULT 0 COMMENT '限时（分钟），0 为不限',
+    status       ENUM('created', 'submitted') NOT NULL DEFAULT 'created' COMMENT '状态：待作答/已提交',
+    score        INT DEFAULT NULL COMMENT '得分（提交后写入，等于答对题数）',
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    submitted_at TIMESTAMP NULL DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='考试试卷表';
+
+-- 试卷题目与作答表：判分以题组为单位（当前均单选题，取题组首道子题答案比对；
+-- 多子题题型如完形/阅读后续扩展时需细化到子题级）
+CREATE TABLE IF NOT EXISTS exam_items (
+    id          INT PRIMARY KEY AUTO_INCREMENT,
+    exam_id     INT NOT NULL COMMENT '关联试卷ID',
+    seq         INT NOT NULL COMMENT '题目在试卷中的序号',
+    group_id    INT NOT NULL COMMENT '关联 question_groups.id',
+    user_answer VARCHAR(10) DEFAULT NULL COMMENT '用户作答 a/b/c/d（提交后写入）',
+    is_correct  TINYINT DEFAULT NULL COMMENT '是否正确（提交后写入）',
+    INDEX idx_exam (exam_id),
+    FOREIGN KEY (exam_id) REFERENCES exams(id) ON DELETE CASCADE,
+    FOREIGN KEY (group_id) REFERENCES question_groups(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='试卷题目与作答表';
