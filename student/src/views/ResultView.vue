@@ -2,14 +2,28 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { marked } from 'marked'
 import { getResult } from '../api/exam'
+import { chatStream } from '../api/agent'
 
 const props = defineProps({ id: { type: String, required: true } })
 const router = useRouter()
 const loading = ref(true)
 const result = ref(null)
-
 const accuracy = ref(0)
+
+// 每道题的 AI 解析状态：{ [seq]: { text, streaming, error } }
+const judgeState = ref({})
+
+// 薄弱点分析状态
+const weakState = ref({ text: '', streaming: false, done: false, error: false })
+
+// 关闭当前 SSE 连接的函数（最多同时一个）
+let closeCurrentStream = null
+
+function renderMd(text) {
+  return marked.parse(text || '')
+}
 
 async function load() {
   try {
@@ -24,32 +38,107 @@ async function load() {
   }
 }
 
+function judgeItem(item) {
+  if (judgeState.value[item.seq]?.streaming) return
+  closeCurrentStream?.()
+
+  const opts = {}
+  for (const o of item.options) opts[o.label] = o.content
+
+  const message = `请用 answer_judge 工具分析这道题：
+题目：${item.content}
+选项：${Object.entries(opts).map(([k, v]) => `${k.toUpperCase()}. ${v}`).join('  ')}
+正确答案：${item.correct_answer}
+我的答案：${item.user_answer || '未作答'}
+解析参考：${item.analysis || '无'}`
+
+  judgeState.value[item.seq] = { text: '', streaming: true, error: false }
+
+  closeCurrentStream = chatStream(message, null, {
+    onToken(content) {
+      judgeState.value[item.seq].text += content
+    },
+    onDone() {
+      judgeState.value[item.seq].streaming = false
+      closeCurrentStream = null
+    },
+    onError(detail) {
+      judgeState.value[item.seq].streaming = false
+      judgeState.value[item.seq].error = true
+      ElMessage.error('AI 解析失败：' + detail)
+      closeCurrentStream = null
+    },
+  })
+}
+
+function analyzeWeak() {
+  if (weakState.value.streaming) return
+  closeCurrentStream?.()
+
+  weakState.value = { text: '', streaming: true, done: false, error: false }
+
+  const message = `请用 analyze_weak_points 工具分析试卷 ${props.id} 的薄弱知识点`
+
+  closeCurrentStream = chatStream(message, null, {
+    onToken(content) {
+      weakState.value.text += content
+    },
+    onDone() {
+      weakState.value.streaming = false
+      weakState.value.done = true
+      closeCurrentStream = null
+    },
+    onError(detail) {
+      weakState.value.streaming = false
+      weakState.value.error = true
+      ElMessage.error('薄弱点分析失败：' + detail)
+      closeCurrentStream = null
+    },
+  })
+}
+
 onMounted(load)
 </script>
 
 <template>
   <div v-loading="loading" class="result-wrap">
     <template v-if="result">
+      <!-- 得分卡 -->
       <el-card shadow="never" class="score-card">
         <div class="score-main">
           <div class="score-num">{{ result.score }} / {{ result.total }}</div>
           <div class="score-label">正确率 {{ accuracy }}%</div>
         </div>
-        <div class="score-meta">
+        <div class="score-actions">
           <el-tag type="info" size="small">{{ result.level || '综合' }}</el-tag>
+          <el-button @click="router.push('/history')">返回历史</el-button>
+          <el-button type="primary" @click="router.push('/exam')">再考一套</el-button>
         </div>
-        <el-button @click="router.push('/history')">返回历史</el-button>
-        <el-button type="primary" @click="router.push('/exam')">再考一套</el-button>
       </el-card>
 
+      <!-- 每道题 -->
       <el-card v-for="item in result.items" :key="item.seq" shadow="never" class="q-card">
         <div class="q-title">
           <span class="q-seq">第 {{ item.seq }} 题</span>
           <el-tag :type="item.is_correct ? 'success' : 'danger'" size="small">
             {{ item.is_correct ? '正确' : '错误' }}
           </el-tag>
+          <!-- 错题才显示 AI 解析按钮 -->
+          <el-button
+            v-if="!item.is_correct"
+            size="small"
+            type="primary"
+            plain
+            :loading="judgeState[item.seq]?.streaming"
+            style="margin-left: auto"
+            @click="judgeItem(item)"
+          >
+            {{ judgeState[item.seq]?.text ? '重新解析' : 'AI 解析' }}
+          </el-button>
         </div>
+
         <div class="q-content">{{ item.content }}</div>
+
         <div class="opt-list">
           <div
             v-for="opt in item.options"
@@ -65,8 +154,45 @@ onMounted(load)
             <span v-else-if="opt.label === item.user_answer" class="mark">✗ 你的答案</span>
           </div>
         </div>
+
         <div v-if="!item.user_answer" class="unanswered">（未作答）</div>
         <div v-if="item.analysis" class="analysis">{{ item.analysis }}</div>
+
+        <!-- AI 解析输出区 -->
+        <div v-if="judgeState[item.seq]?.text || judgeState[item.seq]?.streaming" class="ai-analysis">
+          <div class="ai-label">🤖 AI 解析</div>
+          <div class="md" v-html="renderMd(judgeState[item.seq].text)"></div>
+          <span v-if="judgeState[item.seq]?.streaming" class="cursor">▍</span>
+        </div>
+      </el-card>
+
+      <!-- 薄弱点分析卡 -->
+      <el-card shadow="never" class="weak-card">
+        <template #header>
+          <div class="weak-head">
+            <span>📊 薄弱点分析</span>
+            <el-button
+              type="primary"
+              size="small"
+              :loading="weakState.streaming"
+              :disabled="result.score === result.total"
+              @click="analyzeWeak"
+            >
+              {{ weakState.done ? '重新分析' : '开始分析' }}
+            </el-button>
+          </div>
+        </template>
+
+        <div v-if="result.score === result.total" class="weak-perfect">
+          全部答对，没有薄弱点 🎉
+        </div>
+        <div v-else-if="!weakState.text && !weakState.streaming" class="weak-empty">
+          点击「开始分析」，AI 将根据错题分析你的知识薄弱点
+        </div>
+        <div v-else>
+          <div class="md" v-html="renderMd(weakState.text)"></div>
+          <span v-if="weakState.streaming" class="cursor">▍</span>
+        </div>
       </el-card>
     </template>
   </div>
@@ -74,20 +200,23 @@ onMounted(load)
 
 <style scoped>
 .result-wrap { max-width: 820px; }
+
 .score-card :deep(.el-card__body) {
   display: flex;
   align-items: center;
   gap: 20px;
   flex-wrap: wrap;
 }
-.score-main { flex: 1; }
+.score-main { flex: 1; min-width: 120px; }
 .score-num { font-size: 32px; font-weight: 700; color: #409eff; }
 .score-label { color: #999; margin-top: 4px; }
-.score-meta { display: flex; gap: 8px; align-items: center; }
+.score-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
 .q-card { margin-top: 16px; }
 .q-title { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .q-seq { font-weight: 600; }
 .q-content { font-size: 16px; line-height: 1.7; margin-bottom: 14px; }
+
 .opt-list { display: flex; flex-direction: column; gap: 8px; }
 .opt-row { padding: 8px 12px; border-radius: 6px; background: #f5f7fa; line-height: 1.6; }
 .opt-row.correct { background: #f0f9eb; color: #67c23a; }
@@ -99,4 +228,37 @@ onMounted(load)
   background: #fafafa; border-left: 3px solid #409eff;
   white-space: pre-wrap; line-height: 1.7; color: #555;
 }
+
+.ai-analysis {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: #f0f7ff;
+  border-left: 3px solid #409eff;
+  border-radius: 0 6px 6px 0;
+}
+.ai-label { font-size: 12px; color: #409eff; font-weight: 600; margin-bottom: 8px; }
+
+.weak-card { margin-top: 24px; }
+.weak-head { display: flex; align-items: center; justify-content: space-between; }
+.weak-empty { color: #999; text-align: center; padding: 20px 0; }
+.weak-perfect { color: #67c23a; text-align: center; padding: 20px 0; font-weight: 600; }
+
+.cursor {
+  display: inline-block;
+  animation: blink 0.8s step-end infinite;
+  color: #409eff;
+  font-weight: 700;
+  margin-left: 1px;
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+.md :deep(p) { margin: 6px 0; }
+.md :deep(h1),.md :deep(h2),.md :deep(h3) { margin: 10px 0 6px; }
+.md :deep(ul),.md :deep(ol) { padding-left: 20px; margin: 6px 0; }
+.md :deep(li) { margin: 4px 0; line-height: 1.6; }
+.md :deep(pre) { background: #f5f7fa; padding: 10px; border-radius: 6px; overflow-x: auto; }
+.md :deep(code) { background: #f5f7fa; padding: 1px 4px; border-radius: 3px; }
 </style>
