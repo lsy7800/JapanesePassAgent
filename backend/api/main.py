@@ -6,7 +6,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api.routers import exams, questions
+from backend.api.routers import agent, exams, questions
 
 app = FastAPI(
     title="JapanesePassAgent API",
@@ -25,6 +25,7 @@ app.add_middleware(
 
 app.include_router(questions.router)
 app.include_router(exams.router)
+app.include_router(agent.router)
 
 
 @app.get("/health", tags=["health"])

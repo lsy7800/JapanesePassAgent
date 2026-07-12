@@ -53,6 +53,8 @@ DB_CONFIG = {
 # ========== LLM 配置 ==========
 DEEPSEEK_API_URL = get("DEEPSEEK_API_URL", "https://api.deepseek.com/v1/chat/completions")
 DEEPSEEK_MODEL = get("DEEPSEEK_MODEL", "deepseek-chat")
+# OpenAI 兼容基址（langchain ChatOpenAI 用），取 API_URL 去掉 /chat/completions 尾部
+DEEPSEEK_BASE_URL = get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 
 # ========== 爬虫配置 ==========
 SPIDER_BASE_URL = get("SPIDER_BASE_URL", "http://account.for-test.cn")
