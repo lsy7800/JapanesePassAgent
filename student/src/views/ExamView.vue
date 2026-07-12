@@ -1,9 +1,11 @@
 <script setup>
 import { ref, reactive, computed, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { generateExam, submitExam } from '../api/exam'
 
-const LABELS = ['a', 'b', 'c', 'd']
+const router = useRouter()
+
 const LEVEL_OPTIONS = ['N1', 'N2', 'N3', 'N4', 'N5']
 const TYPE_OPTIONS = [
   { value: 'single_choice', label: '单项选择' },
@@ -11,7 +13,6 @@ const TYPE_OPTIONS = [
   { value: 'reading', label: '阅读理解' },
 ]
 
-// 阶段：config 配置 / answering 答题 / result 结果
 const phase = ref('config')
 
 const config = reactive({
@@ -28,16 +29,11 @@ const diffMax = ref(9)
 const loading = ref(false)
 const exam = ref(null)
 const answers = reactive({})
-const result = ref(null)
 
 const remaining = ref(0)
 let timer = null
 
 const answeredCount = computed(() => Object.keys(answers).length)
-
-function typeLabel(v) {
-  return TYPE_OPTIONS.find((t) => t.value === v)?.label || v
-}
 
 function fmtTime(sec) {
   const m = Math.floor(sec / 60)
@@ -86,10 +82,7 @@ function startTimer(sec) {
 }
 
 function stopTimer() {
-  if (timer) {
-    clearInterval(timer)
-    timer = null
-  }
+  if (timer) { clearInterval(timer); timer = null }
 }
 
 async function onSubmit() {
@@ -101,9 +94,7 @@ async function onSubmit() {
         confirmButtonText: '交卷',
         cancelButtonText: '继续答题',
       })
-    } catch {
-      return
-    }
+    } catch { return }
   }
   doSubmit()
 }
@@ -111,17 +102,12 @@ async function onSubmit() {
 async function doSubmit() {
   stopTimer()
   const payload = Object.entries(answers).map(([seq, answer]) => ({ seq: Number(seq), answer }))
-  if (payload.length === 0) {
-    ElMessage.info('未作答任何题目')
-  }
   loading.value = true
   try {
     const data = await submitExam(exam.value.id, payload.length ? payload : [{ seq: 1, answer: 'a' }])
-    result.value = data
-    phase.value = 'result'
+    router.push(`/result/${data.id}`)
   } catch (e) {
     ElMessage.error('交卷失败：' + (e.response?.data?.detail || e.message))
-  } finally {
     loading.value = false
   }
 }
@@ -129,15 +115,9 @@ async function doSubmit() {
 function restart() {
   stopTimer()
   exam.value = null
-  result.value = null
   Object.keys(answers).forEach((k) => delete answers[k])
   phase.value = 'config'
 }
-
-const accuracy = computed(() => {
-  if (!result.value || !result.value.total) return 0
-  return Math.round((result.value.score / result.value.total) * 100)
-})
 
 onUnmounted(stopTimer)
 </script>
@@ -204,51 +184,11 @@ onUnmounted(stopTimer)
         </el-radio-group>
       </el-card>
     </div>
-
-    <!-- 阶段3：结果 -->
-    <div v-else-if="phase === 'result'">
-      <el-card shadow="never" class="score-card">
-        <div class="score-main">
-          <div class="score-num">{{ result.score }} / {{ result.total }}</div>
-          <div class="score-label">正确率 {{ accuracy }}%</div>
-        </div>
-        <el-button type="primary" @click="restart">再考一套</el-button>
-      </el-card>
-
-      <el-card v-for="item in result.items" :key="item.seq" shadow="never" class="q-card">
-        <div class="q-title">
-          <span class="q-seq">第 {{ item.seq }} 题</span>
-          <el-tag :type="item.is_correct ? 'success' : 'danger'" size="small">
-            {{ item.is_correct ? '正确' : '错误' }}
-          </el-tag>
-        </div>
-        <div class="q-content">{{ item.content }}</div>
-        <div class="opt-list">
-          <div
-            v-for="opt in item.options"
-            :key="opt.label"
-            class="opt-row"
-            :class="{
-              correct: opt.label === item.correct_answer,
-              wrong: opt.label === item.user_answer && !item.is_correct,
-            }"
-          >
-            {{ opt.label.toUpperCase() }}. {{ opt.content }}
-            <span v-if="opt.label === item.correct_answer" class="mark">✓ 正确答案</span>
-            <span v-else-if="opt.label === item.user_answer" class="mark">✗ 你的答案</span>
-          </div>
-        </div>
-        <div v-if="!item.user_answer" class="unanswered">（未作答）</div>
-        <div v-if="item.analysis" class="analysis">{{ item.analysis }}</div>
-      </el-card>
-    </div>
   </div>
 </template>
 
 <style scoped>
-.exam-wrap {
-  max-width: 820px;
-}
+.exam-wrap { max-width: 820px; }
 .answer-bar {
   display: flex;
   align-items: center;
@@ -258,95 +198,12 @@ onUnmounted(stopTimer)
   border-bottom: 1px solid #ebeef5;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 }
-.answer-bar .timer {
-  color: #e6a23c;
-  font-weight: 600;
-}
-.answer-bar .el-button {
-  margin-left: auto;
-}
-.q-card {
-  margin-top: 16px;
-}
-.q-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.q-seq {
-  font-weight: 600;
-}
-.q-content {
-  font-size: 16px;
-  line-height: 1.7;
-  margin-bottom: 14px;
-}
-.q-options {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.q-option {
-  height: auto;
-  white-space: normal;
-  line-height: 1.6;
-}
-.opt-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.opt-row {
-  padding: 8px 12px;
-  border-radius: 6px;
-  background: #f5f7fa;
-  line-height: 1.6;
-}
-.opt-row.correct {
-  background: #f0f9eb;
-  color: #67c23a;
-}
-.opt-row.wrong {
-  background: #fef0f0;
-  color: #f56c6c;
-}
-.opt-row .mark {
-  margin-left: 8px;
-  font-size: 12px;
-  font-weight: 600;
-}
-.unanswered {
-  color: #e6a23c;
-  margin-top: 8px;
-}
-.analysis {
-  margin-top: 12px;
-  padding: 12px;
-  background: #fafafa;
-  border-left: 3px solid #409eff;
-  white-space: pre-wrap;
-  line-height: 1.7;
-  color: #555;
-}
-.score-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.score-card :deep(.el-card__body) {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-}
-.score-num {
-  font-size: 32px;
-  font-weight: 700;
-  color: #409eff;
-}
-.score-label {
-  color: #999;
-  margin-top: 4px;
-}
+.answer-bar .timer { color: #e6a23c; font-weight: 600; }
+.answer-bar .el-button { margin-left: auto; }
+.q-card { margin-top: 16px; }
+.q-title { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.q-seq { font-weight: 600; }
+.q-content { font-size: 16px; line-height: 1.7; margin-bottom: 14px; }
+.q-options { display: flex; flex-direction: column; gap: 10px; }
+.q-option { height: auto; white-space: normal; line-height: 1.6; }
 </style>

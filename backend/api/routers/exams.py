@@ -14,10 +14,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from backend.api.deps import get_db, get_current_user
 from backend.schemas.exam import (
     ExamGenerateRequest,
+    ExamHistoryResponse,
     ExamItemOut,
     ExamOptionOut,
     ExamOut,
     ExamResultOut,
+    ExamSummary,
     ResultItemOut,
     SubmitRequest,
 )
@@ -43,8 +45,49 @@ def _first_question(cursor, group_id: int):
     return cursor.fetchone()
 
 
+@router.get("", response_model=ExamHistoryResponse)
+def list_exams(
+    page: int = 1,
+    page_size: int = 20,
+    conn=Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """当前用户的考试历史（已提交，按时间倒序）。"""
+    uid = current_user["id"]
+    offset = (page - 1) * page_size
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS cnt FROM exams WHERE user_id = %s AND status = 'submitted'",
+            (uid,),
+        )
+        total = cur.fetchone()["cnt"]
+        cur.execute(
+            """SELECT id, level, total, score, status,
+                      DATE_FORMAT(created_at, '%%Y-%%m-%%d %%H:%%i') AS created_at,
+                      DATE_FORMAT(submitted_at, '%%Y-%%m-%%d %%H:%%i') AS submitted_at
+               FROM exams WHERE user_id = %s AND status = 'submitted'
+               ORDER BY submitted_at DESC
+               LIMIT %s OFFSET %s""",
+            (uid, page_size, offset),
+        )
+        rows = cur.fetchall()
+    items = [
+        ExamSummary(
+            id=r["id"],
+            level=r["level"] or "",
+            total=r["total"],
+            score=r["score"],
+            status=r["status"],
+            created_at=r["created_at"] or "",
+            submitted_at=r["submitted_at"],
+        )
+        for r in rows
+    ]
+    return ExamHistoryResponse(items=items, total=total)
+
+
 @router.post("/generate", response_model=ExamOut, status_code=status.HTTP_201_CREATED)
-def generate_exam(payload: ExamGenerateRequest, conn=Depends(get_db), _=Depends(get_current_user)):
+def generate_exam(payload: ExamGenerateRequest, conn=Depends(get_db), current_user=Depends(get_current_user)):
     # 组卷筛选：复用题库的 WHERE 拼装思路
     where, params = [], []
     if payload.level:
@@ -72,8 +115,8 @@ def generate_exam(payload: ExamGenerateRequest, conn=Depends(get_db), _=Depends(
                 raise HTTPException(status_code=422, detail="没有符合条件的题目，无法组卷")
 
             cursor.execute(
-                "INSERT INTO exams (level, total, time_limit, status) VALUES (%s, %s, %s, 'created')",
-                (payload.level or "", len(group_ids), payload.time_limit_minutes),
+                "INSERT INTO exams (user_id, level, total, time_limit, status) VALUES (%s, %s, %s, %s, 'created')",
+                (current_user["id"], payload.level or "", len(group_ids), payload.time_limit_minutes),
             )
             exam_id = cursor.lastrowid
 
@@ -136,18 +179,27 @@ def _build_exam(conn, exam_id: int) -> ExamOut:
 
 
 @router.get("/{exam_id}", response_model=ExamOut)
-def get_exam(exam_id: int, conn=Depends(get_db), _=Depends(get_current_user)):
+def get_exam(exam_id: int, conn=Depends(get_db), current_user=Depends(get_current_user)):
+    with conn.cursor() as cur:
+        cur.execute("SELECT user_id FROM exams WHERE id = %s", (exam_id,))
+        row = cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"试卷 {exam_id} 不存在")
+    if row["user_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="无权访问该试卷")
     return _build_exam(conn, exam_id)
 
 
 @router.post("/{exam_id}/submit", response_model=ExamResultOut)
-def submit_exam(exam_id: int, payload: SubmitRequest, conn=Depends(get_db), _=Depends(get_current_user)):
+def submit_exam(exam_id: int, payload: SubmitRequest, conn=Depends(get_db), current_user=Depends(get_current_user)):
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT id, status FROM exams WHERE id = %s", (exam_id,))
+            cursor.execute("SELECT id, status, user_id FROM exams WHERE id = %s", (exam_id,))
             exam = cursor.fetchone()
             if exam is None:
                 raise HTTPException(status_code=404, detail=f"试卷 {exam_id} 不存在")
+            if exam["user_id"] != current_user["id"]:
+                raise HTTPException(status_code=403, detail="无权访问该试卷")
             if exam["status"] == "submitted":
                 raise HTTPException(status_code=409, detail="试卷已提交，不能重复提交")
 
@@ -229,12 +281,14 @@ def _build_result(conn, exam_id: int) -> ExamResultOut:
 
 
 @router.get("/{exam_id}/result", response_model=ExamResultOut)
-def get_result(exam_id: int, conn=Depends(get_db), _=Depends(get_current_user)):
-    with conn.cursor() as cursor:
-        cursor.execute("SELECT status FROM exams WHERE id = %s", (exam_id,))
-        exam = cursor.fetchone()
+def get_result(exam_id: int, conn=Depends(get_db), current_user=Depends(get_current_user)):
+    with conn.cursor() as cur:
+        cur.execute("SELECT user_id, status FROM exams WHERE id = %s", (exam_id,))
+        exam = cur.fetchone()
     if exam is None:
         raise HTTPException(status_code=404, detail=f"试卷 {exam_id} 不存在")
+    if exam["user_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="无权访问该试卷")
     if exam["status"] != "submitted":
         raise HTTPException(status_code=409, detail="试卷尚未提交，无结果可查")
     return _build_result(conn, exam_id)

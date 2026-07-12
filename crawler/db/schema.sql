@@ -53,13 +53,15 @@ CREATE TABLE IF NOT EXISTS options (
 -- 考试试卷表：一次组卷生成一条记录
 CREATE TABLE IF NOT EXISTS exams (
     id           INT PRIMARY KEY AUTO_INCREMENT,
+    user_id      INT DEFAULT NULL COMMENT '出题用户ID，NULL 表示匿名/Agent组卷',
     level        VARCHAR(10) DEFAULT '' COMMENT '组卷时的目标级别',
     total        INT NOT NULL DEFAULT 0 COMMENT '试卷题目数',
     time_limit   INT DEFAULT 0 COMMENT '限时（分钟），0 为不限',
     status       ENUM('created', 'submitted') NOT NULL DEFAULT 'created' COMMENT '状态：待作答/已提交',
     score        INT DEFAULT NULL COMMENT '得分（提交后写入，等于答对题数）',
     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    submitted_at TIMESTAMP NULL DEFAULT NULL
+    submitted_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_user_id (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='考试试卷表';
 
 -- 试卷题目与作答表：判分以题组为单位（当前均单选题，取题组首道子题答案比对；

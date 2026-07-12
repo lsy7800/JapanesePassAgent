@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { EditPen, ChatDotRound, SwitchButton } from '@element-plus/icons-vue'
+import { EditPen, ChatDotRound, SwitchButton, List } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth'
 
 const route = useRoute()
@@ -31,6 +31,10 @@ function logout() {
         <el-menu-item index="/chat">
           <el-icon><ChatDotRound /></el-icon>
           <span>AI 助手</span>
+        </el-menu-item>
+        <el-menu-item index="/history">
+          <el-icon><List /></el-icon>
+          <span>考试历史</span>
         </el-menu-item>
       </el-menu>
       <div class="aside-footer">

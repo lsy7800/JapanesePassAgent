@@ -15,3 +15,8 @@ export function submitExam(examId, answers) {
 export function getResult(examId) {
   return http.get(`/exams/${examId}/result`).then((r) => r.data)
 }
+
+export function listExams(page = 1, pageSize = 20) {
+  return http.get('/exams', { params: { page, page_size: pageSize } }).then((r) => r.data)
+}
+

@@ -13,6 +13,28 @@ VALID_LABELS = {"a", "b", "c", "d"}
 VALID_TYPES = {"single_choice", "cloze", "reading"}
 
 
+class ExamSummary(BaseModel):
+    """历史列表用，轻量摘要，不含题目详情。"""
+    id: int
+    level: str = ""
+    total: int
+    score: int | None = None
+    status: str
+    created_at: str = ""
+    submitted_at: str | None = None
+
+    @property
+    def accuracy(self) -> float | None:
+        if self.status != "submitted" or self.total == 0:
+            return None
+        return round((self.score or 0) / self.total * 100, 1)
+
+
+class ExamHistoryResponse(BaseModel):
+    items: list[ExamSummary]
+    total: int
+
+
 # ========== 组卷请求 ==========
 
 class ExamGenerateRequest(BaseModel):
