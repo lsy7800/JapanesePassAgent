@@ -1,0 +1,28 @@
+# 本地开发用：仅启动 MySQL 数据库
+# 密码等敏感信息从 .env 读取（compose 自动加载同目录 .env），不写入版本库。
+#
+# 用法：
+#   docker compose up -d db      # 后台启动数据库
+#   docker compose down          # 停止（保留数据）
+#   docker compose down -v       # 停止并清空数据卷
+services:
+  db:
+    image: mysql:8.0
+    container_name: jlpt-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+    ports:
+      - "${DB_PORT}:3306"
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${DB_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mysql_data:

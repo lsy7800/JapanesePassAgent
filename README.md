@@ -745,19 +745,41 @@ uv run python -m crawler.spiders.write_to_mysql
 uv run uvicorn backend.api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### Docker 部署（规划中）
+### 本地开发：用 Docker 启动 MySQL
+
+项目根目录提供了 `docker-compose.yml`，仅启动 MySQL，参数（密码/库名/端口）从 `.env` 读取，与代码配置自动对齐：
+
+```bash
+docker compose up -d db      # 后台启动数据库（首次会拉取 mysql:8.0 镜像）
+docker compose ps            # 查看健康状态，等 healthy 后再连接
+docker compose down          # 停止（保留数据卷）
+docker compose down -v       # 停止并清空数据卷
+```
+
+启动后建表并导入数据：
+
+```bash
+# 建表（或首次运行 write_to_mysql 时自动执行）
+mysql -h127.0.0.1 -P3307 -uroot -p jlpt < crawler/db/schema.sql
+
+# 导入校验后的题库
+uv run python -c "from crawler.spiders.write_to_mysql import write_to_mysql; write_to_mysql('result_67_validated.json')"
+```
+
+### 完整 Docker 部署（规划中）
+
+将后端 API 一并容器化的完整编排（`api` 服务待 Dockerfile 就绪后启用）：
 
 ```yaml
-# docker-compose.yml
-version: '3.8'
+# docker-compose.full.yml（规划中）
 services:
   db:
     image: mysql:8.0
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
-      MYSQL_DATABASE: jlpt
+      MYSQL_DATABASE: ${DB_NAME}
     ports:
-      - "3307:3306"
+      - "${DB_PORT}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
 
