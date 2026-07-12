@@ -18,8 +18,8 @@ from backend.utils.security import decode_token
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
 
-def _auth_by_token(token: str, conn):
-    """SSE 专用：从 query param token 解析用户，失败抛 HTTPException。"""
+def _auth_by_token(token: str, conn) -> int:
+    """SSE 专用：从 query param token 解析用户，返回 user_id，失败抛 HTTPException。"""
     if not token:
         raise HTTPException(status_code=401, detail="未登录")
     try:
@@ -31,14 +31,15 @@ def _auth_by_token(token: str, conn):
         cur.execute("SELECT id FROM users WHERE id = %s", (user_id,))
         if not cur.fetchone():
             raise HTTPException(status_code=401, detail="用户不存在")
+    return user_id
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(payload: ChatRequest, _=Depends(get_current_user)):
+def chat(payload: ChatRequest, current_user=Depends(get_current_user)):
     session_id = payload.session_id or uuid.uuid4().hex
     from backend.agent.graph import run_agent
     try:
-        result = run_agent(payload.message, session_id, payload.context)
+        result = run_agent(payload.message, session_id, payload.context, user_id=current_user["id"])
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Agent 处理失败：{e}")
     return ChatResponse(
@@ -55,20 +56,13 @@ async def stream(
     token: str = Query(default="", description="JWT access_token（EventSource 不支持 Header，走 query）"),
     conn=Depends(get_db),
 ):
-    """SSE 流式对话接口。
-
-    前端用 EventSource 连接，每条 SSE 数据格式：
-      data: {"type": "token",  "content": "..."}
-      data: {"type": "tool",   "name": "...", "args": {...}}
-      data: {"type": "done",   "session_id": "..."}
-      data: {"type": "error",  "detail": "..."}
-    """
-    _auth_by_token(token, conn)
+    """SSE 流式对话接口。"""
+    user_id = _auth_by_token(token, conn)
     sid = session_id or uuid.uuid4().hex
     from backend.agent.graph import stream_agent
 
     return StreamingResponse(
-        stream_agent(message, sid),
+        stream_agent(message, sid, user_id=user_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

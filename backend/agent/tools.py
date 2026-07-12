@@ -127,6 +127,7 @@ def generate_exam(
     total_questions: int = 10,
     difficulty_min: int | None = None,
     difficulty_max: int | None = None,
+    user_id: int | None = None,
 ) -> dict:
     """智能组卷：按条件随机抽题生成一套试卷并落库，返回试卷ID与题目列表（不含答案）。
 
@@ -134,6 +135,7 @@ def generate_exam(
     - level: 级别 N1~N5
     - total_questions: 题目数，默认 10，最多 50
     - difficulty_min/difficulty_max: 难度区间 0-9
+    - user_id: 当前用户ID（由 Agent 调用方注入，用于关联考试历史）
 
     返回 {exam_id, total, items}，items 每题含 seq、题干、选项（不含答案）。
     用户做完后可通过 exam_id 提交判分。
@@ -163,8 +165,8 @@ def generate_exam(
                 return {"exam_id": None, "total": 0, "items": [], "message": "没有符合条件的题目"}
 
             cur.execute(
-                "INSERT INTO exams (level, total, time_limit, status) VALUES (%s, %s, 0, 'created')",
-                (level or "", len(group_ids)),
+                "INSERT INTO exams (user_id, level, total, time_limit, status) VALUES (%s, %s, %s, 0, 'created')",
+                (user_id, level or "", len(group_ids)),
             )
             exam_id = cur.lastrowid
 

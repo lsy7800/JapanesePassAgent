@@ -5,7 +5,8 @@ from pydantic import BaseModel, EmailStr, Field
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=6, description="密码至少6位")
-    role: str = Field(default="student", pattern="^(student|admin)$")
+    # 公开注册只允许 student；admin 账号通过后台命令行创建
+    role: str = Field(default="student", pattern="^student$")
 
 
 class LoginRequest(BaseModel):

@@ -22,20 +22,26 @@ SYSTEM_PROMPT = """你是一位专业的日语能力考试（JLPT）辅导专家
 
 你可以使用以下工具：
 - fetch_questions：从题库检索真题，用于举例、讲解或组织练习
-- generate_exam：为用户智能组卷生成一套练习试卷
+- generate_exam：为用户智能组卷生成一套练习试卷（调用时必须传入 user_id 参数）
 - explain_grammar：对指定语法点或词汇生成结构化讲解（用法/例句/易错点/考点）
 - answer_judge：对用户的具体作答进行 AI 判断和个性化解析
 - analyze_weak_points：分析已提交试卷的错题，汇总薄弱知识点并给出学习建议
 
 行为准则：
 1. 用户想做题/练习/模拟考时，调用 generate_exam 组卷，清晰列出题目和选项
-2. 用户想看某类题目或需要例题时，调用 fetch_questions
-3. 用户问语法点或词汇用法时，调用 explain_grammar 生成结构化讲解
-4. 用户提交了某题的作答、想知道对错原因时，调用 answer_judge
-5. 用户完成考试后想了解薄弱点时，调用 analyze_weak_points（需提供 exam_id）
-6. 讲解一律用中文，简洁清晰，展示题目时选项用 A/B/C/D 标注
-7. 不要编造题目；题目一律来自工具返回的真实题库数据
+2. 调用 generate_exam 时，始终将系统提示中提供的 user_id 作为参数传入
+3. 用户想看某类题目或需要例题时，调用 fetch_questions
+4. 用户问语法点或词汇用法时，调用 explain_grammar 生成结构化讲解
+5. 用户提交了某题的作答、想知道对错原因时，调用 answer_judge
+6. 用户完成考试后想了解薄弱点时，调用 analyze_weak_points（需提供 exam_id）
+7. 讲解一律用中文，简洁清晰，展示题目时选项用 A/B/C/D 标注
+8. 不要编造题目；题目一律来自工具返回的真实题库数据
 """
+
+
+def _build_prompt(user_id: int | None) -> SystemMessage:
+    extra = f"\n\n当前用户 user_id = {user_id}，调用 generate_exam 时必须传入此值。" if user_id else ""
+    return SystemMessage(content=SYSTEM_PROMPT + extra)
 
 
 def _build_agent():
@@ -48,7 +54,6 @@ def _build_agent():
     return create_react_agent(
         llm,
         ALL_TOOLS,
-        prompt=SystemMessage(content=SYSTEM_PROMPT),
         checkpointer=MemorySaver(),
     )
 
@@ -65,29 +70,26 @@ def get_agent():
 
 
 async def stream_agent(
-    message: str, session_id: str, context: dict | None = None
+    message: str, session_id: str, context: dict | None = None, user_id: int | None = None
 ) -> AsyncGenerator[str, None]:
-    """异步生成器，逐步 yield SSE 格式字符串。
-
-    事件类型：
-    - data: {"type": "token",   "content": "..."}   LLM 输出的文字片段
-    - data: {"type": "tool",    "name": "...", "args": {...}}  工具调用开始
-    - data: {"type": "done",    "session_id": "..."}  流结束
-    - data: {"type": "error",   "detail": "..."}     异常
-    """
+    """异步生成器，逐步 yield SSE 格式字符串。"""
     agent = get_agent()
     user_content = message
     if context:
         user_content = f"{message}\n\n（上下文：{context}）"
 
     config = {"configurable": {"thread_id": session_id}}
-    inputs = {"messages": [HumanMessage(content=user_content)]}
+    inputs = {
+        "messages": [
+            _build_prompt(user_id),
+            HumanMessage(content=user_content),
+        ]
+    }
 
     try:
         async for event in agent.astream_events(inputs, config=config, version="v2"):
             kind = event["event"]
 
-            # LLM 文字 token
             if kind == "on_chat_model_stream":
                 chunk = event["data"].get("chunk")
                 if chunk and hasattr(chunk, "content") and chunk.content:
@@ -95,7 +97,6 @@ async def stream_agent(
                     if text:
                         yield f"data: {json.dumps({'type': 'token', 'content': text}, ensure_ascii=False)}\n\n"
 
-            # 工具调用开始
             elif kind == "on_tool_start":
                 tool_name = event.get("name", "")
                 tool_input = event["data"].get("input", {})
@@ -107,12 +108,8 @@ async def stream_agent(
         yield f"data: {json.dumps({'type': 'done', 'session_id': session_id}, ensure_ascii=False)}\n\n"
 
 
-def run_agent(message: str, session_id: str, context: dict | None = None) -> dict:
-    """运行一轮对话，返回 {reply, tool_calls}。
-
-    session_id 作为 langgraph thread_id，隔离并延续各会话的记忆。
-    context（如 current_question_id）会作为附加提示拼进用户消息。
-    """
+def run_agent(message: str, session_id: str, context: dict | None = None, user_id: int | None = None) -> dict:
+    """运行一轮对话，返回 {reply, tool_calls}。"""
     agent = get_agent()
 
     user_content = message
@@ -120,19 +117,22 @@ def run_agent(message: str, session_id: str, context: dict | None = None) -> dic
         user_content = f"{message}\n\n（上下文：{context}）"
 
     result = agent.invoke(
-        {"messages": [HumanMessage(content=user_content)]},
+        {
+            "messages": [
+                _build_prompt(user_id),
+                HumanMessage(content=user_content),
+            ]
+        },
         config={"configurable": {"thread_id": session_id}},
     )
 
     messages = result["messages"]
 
-    # 抽取本轮所有工具调用轨迹
     tool_calls = []
     for m in messages:
         for tc in getattr(m, "tool_calls", None) or []:
             tool_calls.append({"tool": tc.get("name", ""), "args": tc.get("args", {})})
 
-    # 最后一条 AI 文本消息即最终回复
     reply = ""
     for m in reversed(messages):
         if m.__class__.__name__ == "AIMessage" and getattr(m, "content", ""):
