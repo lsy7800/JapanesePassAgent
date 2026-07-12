@@ -20,3 +20,7 @@ data/cookies.json
 .idea/
 .factory/
 .claude/
+
+# Frontend
+node_modules/
+frontend/dist/
