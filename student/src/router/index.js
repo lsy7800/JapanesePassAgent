@@ -6,6 +6,7 @@ import ExamView from '../views/ExamView.vue'
 import ChatView from '../views/ChatView.vue'
 import HistoryView from '../views/HistoryView.vue'
 import ResultView from '../views/ResultView.vue'
+import StatsView from '../views/StatsView.vue'
 
 const routes = [
   { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
@@ -14,6 +15,7 @@ const routes = [
   { path: '/chat', name: 'chat', component: ChatView },
   { path: '/history', name: 'history', component: HistoryView },
   { path: '/result/:id', name: 'result', component: ResultView, props: true },
+  { path: '/stats', name: 'stats', component: StatsView },
 ]
 
 const router = createRouter({

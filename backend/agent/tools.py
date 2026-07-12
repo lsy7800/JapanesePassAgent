@@ -369,4 +369,77 @@ def analyze_weak_points(exam_id: int) -> dict:
     }
 
 
-ALL_TOOLS = [fetch_questions, generate_exam, explain_grammar, answer_judge, analyze_weak_points]
+@tool
+def recommend_questions(
+    weak_points: list[str],
+    level: str | None = None,
+    limit: int = 5,
+) -> list[dict]:
+    """根据薄弱知识点推荐针对性练习题。
+
+    参数：
+    - weak_points: 薄弱知识点列表（如 ["条件表达", "动词读音"]）
+    - level: 限定级别 N1~N5，不传则不限
+    - limit: 推荐题数，默认 5，最多 20
+
+    返回题目列表，每题含题干、选项、正确答案、解析、知识点。
+    """
+    limit = max(1, min(limit, 20))
+    if not weak_points:
+        return []
+
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # 用 JSON_OVERLAPS 找包含任意薄弱点的题组
+            kp_json = json.dumps(weak_points, ensure_ascii=False)
+            where = ["JSON_OVERLAPS(qg.knowledge_points, %s)"]
+            params: list = [kp_json]
+            if level:
+                where.append("qg.level = %s")
+                params.append(level)
+            where_sql = "WHERE " + " AND ".join(where)
+            cur.execute(
+                f"""SELECT qg.id, qg.level, qg.difficulty, qg.knowledge_points
+                    FROM question_groups qg {where_sql}
+                    ORDER BY RAND() LIMIT %s""",
+                params + [limit],
+            )
+            groups = cur.fetchall()
+            result = []
+            for g in groups:
+                cur.execute(
+                    "SELECT id, content, answer, analysis FROM questions WHERE group_id = %s ORDER BY seq LIMIT 1",
+                    (g["id"],),
+                )
+                q = cur.fetchone()
+                if not q:
+                    continue
+                cur.execute(
+                    "SELECT label, content FROM options WHERE question_id = %s ORDER BY label",
+                    (q["id"],),
+                )
+                options = {o["label"]: o["content"] for o in cur.fetchall()}
+                result.append({
+                    "group_id": g["id"],
+                    "level": g["level"],
+                    "difficulty": g["difficulty"],
+                    "knowledge_points": _parse_kp(g["knowledge_points"]),
+                    "content": q["content"],
+                    "options": options,
+                    "answer": q["answer"],
+                    "analysis": q["analysis"],
+                })
+        return result
+    finally:
+        conn.close()
+
+
+ALL_TOOLS = [
+    fetch_questions,
+    generate_exam,
+    explain_grammar,
+    answer_judge,
+    analyze_weak_points,
+    recommend_questions,
+]

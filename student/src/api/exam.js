@@ -20,3 +20,18 @@ export function listExams(page = 1, pageSize = 20) {
   return http.get('/exams', { params: { page, page_size: pageSize } }).then((r) => r.data)
 }
 
+// ── 学习分析 ──
+
+export function getWeakPoints(limit = 10) {
+  return http.get('/stats/weak-points', { params: { limit } }).then((r) => r.data)
+}
+
+export function getHistoryTrend(limit = 20) {
+  return http.get('/stats/history', { params: { limit } }).then((r) => r.data)
+}
+
+export function getWrongQuestions(payload = {}) {
+  return http.post('/review/wrong-questions', payload).then((r) => r.data)
+}
+
+
