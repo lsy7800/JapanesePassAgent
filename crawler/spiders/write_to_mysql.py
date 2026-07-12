@@ -5,47 +5,27 @@ import pymysql
 
 from crawler.config import DB_CONFIG
 
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS questions (
-    id INT PRIMARY KEY,
-    content TEXT NOT NULL,
-    marked VARCHAR(255) DEFAULT '',
-    option_a VARCHAR(255) NOT NULL DEFAULT '',
-    option_b VARCHAR(255) NOT NULL DEFAULT '',
-    option_c VARCHAR(255) NOT NULL DEFAULT '',
-    option_d VARCHAR(255) NOT NULL DEFAULT '',
-    level VARCHAR(10) DEFAULT '',
-    answer VARCHAR(10) NOT NULL DEFAULT '',
-    date VARCHAR(20) DEFAULT '',
-    analysis TEXT,
-    difficulty VARCHAR(10) DEFAULT '',
-    knowledge_points JSON
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+# 三表 DDL 见 crawler/db/schema.sql，此处内联以便一键建表。
+SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "db", "schema.sql")
+
+INSERT_GROUP_SQL = """
+INSERT INTO question_groups (
+    type, article, level, exam_date, difficulty, knowledge_points, source, source_ref
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
 """
 
-INSERT_SQL = """
-INSERT INTO questions (
-    id, content, marked, option_a, option_b, option_c, option_d,
-    level, answer, date, analysis, difficulty,
-    knowledge_points
-) VALUES (
-    %s, %s, %s, %s, %s, %s, %s,
-    %s, %s, %s, %s, %s, %s
-)
-ON DUPLICATE KEY UPDATE
-    content = VALUES(content),
-    marked = VALUES(marked),
-    option_a = VALUES(option_a),
-    option_b = VALUES(option_b),
-    option_c = VALUES(option_c),
-    option_d = VALUES(option_d),
-    level = VALUES(level),
-    answer = VALUES(answer),
-    date = VALUES(date),
-    analysis = VALUES(analysis),
-    difficulty = VALUES(difficulty),
-    knowledge_points = VALUES(knowledge_points);
+INSERT_QUESTION_SQL = """
+INSERT INTO questions (group_id, seq, content, marked, answer, analysis)
+VALUES (%s, %s, %s, %s, %s, %s);
 """
+
+INSERT_OPTION_SQL = """
+INSERT INTO options (question_id, label, content) VALUES (%s, %s, %s);
+"""
+
+DELETE_SOURCE_SQL = "DELETE FROM question_groups WHERE source = %s;"
+
+OPTION_LABELS = ["a", "b", "c", "d"]
 
 
 CSV_HEADERS = [
@@ -54,9 +34,23 @@ CSV_HEADERS = [
 ]
 
 
-def write_to_csv(json_path, csv_path=None):
+def _resolve_data_path(json_path):
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    full_path = os.path.join(project_root, "data", "raw", json_path) if not os.path.isabs(json_path) else json_path
+    if os.path.isabs(json_path):
+        return json_path
+    return os.path.join(project_root, "data", "raw", json_path)
+
+
+def _parse_difficulty(raw):
+    """difficulty 在校验数据中是字符串（如 "4"），转为 TINYINT 可接受的 int。"""
+    try:
+        return max(0, min(9, int(str(raw).strip())))
+    except (ValueError, TypeError):
+        return 0
+
+
+def write_to_csv(json_path, csv_path=None):
+    full_path = _resolve_data_path(json_path)
 
     with open(full_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -90,50 +84,86 @@ def write_to_csv(json_path, csv_path=None):
     print(f"CSV 写入完成: {csv_path} ({len(data)} 条记录)")
 
 
-def write_to_mysql(json_path):
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    full_path = os.path.join(project_root, "data", "raw", json_path) if not os.path.isabs(json_path) else json_path
+def init_schema(cursor):
+    """执行 schema.sql 建立三表结构。"""
+    with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
+        ddl = f.read()
+    for statement in ddl.split(";"):
+        statement = statement.strip()
+        if statement:
+            cursor.execute(statement)
+    print("三表结构已就绪")
+
+
+def _insert_single_choice(cursor, item, source):
+    """将一条校验后的单选题数据写入三表（1 题组 → 1 子题 → 4 选项）。"""
+    source_ref = f"{source}#{item.get('id')}"
+    knowledge_points = json.dumps(item.get("knowledge_points", []), ensure_ascii=False)
+
+    cursor.execute(INSERT_GROUP_SQL, (
+        "single_choice",
+        None,  # 单选题无文章
+        item.get("level", ""),
+        item.get("date", ""),
+        _parse_difficulty(item.get("difficulty")),
+        knowledge_points,
+        source,
+        source_ref,
+    ))
+    group_id = cursor.lastrowid
+
+    cursor.execute(INSERT_QUESTION_SQL, (
+        group_id,
+        1,  # 单选题子题顺序号固定为 1
+        item.get("content", ""),
+        item.get("marked", ""),
+        item.get("answer", ""),
+        item.get("analysis", ""),
+    ))
+    question_id = cursor.lastrowid
+
+    options = item.get("options", {})
+    for label in OPTION_LABELS:
+        cursor.execute(INSERT_OPTION_SQL, (question_id, label, options.get(label, "")))
+
+
+def write_to_mysql(json_path, source=None):
+    """将校验后的 JSON 数据批量写入三表结构。
+
+    幂等策略：按 source 整批替换（先删同 source 题组，级联清理子题与选项，再重新插入），
+    重复导入不会产生脏数据。source 默认取文件名（去扩展名），如 result_67_validated。
+    """
+    full_path = _resolve_data_path(json_path)
+
+    if source is None:
+        source = os.path.splitext(os.path.basename(json_path))[0]
 
     with open(full_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     conn = pymysql.connect(**DB_CONFIG)
-    cursor = conn.cursor()
+    try:
+        cursor = conn.cursor()
+        init_schema(cursor)
 
-    cursor.execute(CREATE_TABLE_SQL)
-    print("表已就绪")
+        # 幂等：清理该 source 的旧数据（外键 ON DELETE CASCADE 自动清理子题和选项）
+        cursor.execute(DELETE_SOURCE_SQL, (source,))
+        print(f"已清理来源 '{source}' 的旧数据")
 
-    success = 0
-    for item in data:
-        try:
-            options = item.get("options", {})
-            knowledge_points = json.dumps(item.get("knowledge_points", []), ensure_ascii=False)
+        success = 0
+        for item in data:
+            try:
+                _insert_single_choice(cursor, item, source)
+                success += 1
+            except Exception as e:
+                print(f"写入失败 ID: {item.get('id')}, 错误: {e}")
 
-            cursor.execute(INSERT_SQL, (
-                item.get("id"),
-                item.get("content", ""),
-                item.get("marked", ""),
-                options.get("a", ""),
-                options.get("b", ""),
-                options.get("c", ""),
-                options.get("d", ""),
-                item.get("level", ""),
-                item.get("answer", ""),
-                item.get("date", ""),
-                item.get("analysis", ""),
-                item.get("difficulty", ""),
-                knowledge_points,
-            ))
-            success += 1
-        except Exception as e:
-            print(f"写入失败 ID: {item.get('id')}, 错误: {e}")
-
-    conn.commit()
-    print(f"写入完成: 成功 {success}/{len(data)}")
-    cursor.close()
-    conn.close()
+        conn.commit()
+        print(f"写入完成: 成功 {success}/{len(data)}（source={source}）")
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
     # write_to_mysql("result_67_validated.json")
-    write_to_csv("result_67_validated.json","test.csv")
+    write_to_csv("result_67_validated.json", "test.csv")

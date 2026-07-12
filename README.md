@@ -690,7 +690,13 @@ uv sync
 CREATE DATABASE jlpt DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-执行建表 SQL（参考上方[数据库设计](#数据库设计)中的三张表 DDL）。
+执行建表 SQL（参考上方[数据库设计](#数据库设计)中的三张表 DDL）：
+
+```bash
+mysql -u root -p jlpt < crawler/db/schema.sql
+```
+
+> 也可跳过此步——`write_to_mysql` 首次运行时会自动执行 `schema.sql` 建表。
 
 #### 4. 配置环境变量
 
