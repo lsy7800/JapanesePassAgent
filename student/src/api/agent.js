@@ -1,6 +1,5 @@
-import axios from 'axios'
-
-const http = axios.create({ baseURL: '/api/v1', timeout: 60000 })
+import http from './http'
+import { useAuthStore } from '../stores/auth'
 
 // 同步接口（保留，备用）
 export function chat(message, sessionId = null, context = null) {
@@ -9,20 +8,18 @@ export function chat(message, sessionId = null, context = null) {
 
 /**
  * SSE 流式对话
+ * EventSource 不支持自定义 Header，token 通过 query 参数传递。
  *
- * @param {string}   message        用户消息
- * @param {string|null} sessionId   会话ID
- * @param {object}   callbacks      { onToken, onTool, onDone, onError }
- *   - onToken(content: string)     每个文字 token
- *   - onTool(name, args)           工具调用事件
- *   - onDone(sessionId: string)    流结束，带最终 session_id
- *   - onError(detail: string)      错误
- * @returns {function} close        调用以提前关闭连接
+ * @param {string}   message
+ * @param {string|null} sessionId
+ * @param {object}   callbacks  { onToken, onTool, onDone, onError }
+ * @returns {function} close — 调用以提前关闭连接
  */
 export function chatStream(message, sessionId, callbacks = {}) {
   const { onToken, onTool, onDone, onError } = callbacks
+  const auth = useAuthStore()
 
-  const params = new URLSearchParams({ message })
+  const params = new URLSearchParams({ message, token: auth.token || '' })
   if (sessionId) params.set('session_id', sessionId)
 
   const url = `/api/v1/agent/stream?${params.toString()}`
@@ -30,11 +27,7 @@ export function chatStream(message, sessionId, callbacks = {}) {
 
   es.onmessage = (e) => {
     let payload
-    try {
-      payload = JSON.parse(e.data)
-    } catch {
-      return
-    }
+    try { payload = JSON.parse(e.data) } catch { return }
 
     if (payload.type === 'token') {
       onToken?.(payload.content)

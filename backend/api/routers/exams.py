@@ -11,7 +11,7 @@
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from backend.api.deps import get_db
+from backend.api.deps import get_db, get_current_user
 from backend.schemas.exam import (
     ExamGenerateRequest,
     ExamItemOut,
@@ -44,7 +44,7 @@ def _first_question(cursor, group_id: int):
 
 
 @router.post("/generate", response_model=ExamOut, status_code=status.HTTP_201_CREATED)
-def generate_exam(payload: ExamGenerateRequest, conn=Depends(get_db)):
+def generate_exam(payload: ExamGenerateRequest, conn=Depends(get_db), _=Depends(get_current_user)):
     # 组卷筛选：复用题库的 WHERE 拼装思路
     where, params = [], []
     if payload.level:
@@ -136,12 +136,12 @@ def _build_exam(conn, exam_id: int) -> ExamOut:
 
 
 @router.get("/{exam_id}", response_model=ExamOut)
-def get_exam(exam_id: int, conn=Depends(get_db)):
+def get_exam(exam_id: int, conn=Depends(get_db), _=Depends(get_current_user)):
     return _build_exam(conn, exam_id)
 
 
 @router.post("/{exam_id}/submit", response_model=ExamResultOut)
-def submit_exam(exam_id: int, payload: SubmitRequest, conn=Depends(get_db)):
+def submit_exam(exam_id: int, payload: SubmitRequest, conn=Depends(get_db), _=Depends(get_current_user)):
     try:
         with conn.cursor() as cursor:
             cursor.execute("SELECT id, status FROM exams WHERE id = %s", (exam_id,))
@@ -229,7 +229,7 @@ def _build_result(conn, exam_id: int) -> ExamResultOut:
 
 
 @router.get("/{exam_id}/result", response_model=ExamResultOut)
-def get_result(exam_id: int, conn=Depends(get_db)):
+def get_result(exam_id: int, conn=Depends(get_db), _=Depends(get_current_user)):
     with conn.cursor() as cursor:
         cursor.execute("SELECT status FROM exams WHERE id = %s", (exam_id,))
         exam = cursor.fetchone()

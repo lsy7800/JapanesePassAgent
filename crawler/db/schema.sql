@@ -1,3 +1,13 @@
+-- 用户表
+CREATE TABLE IF NOT EXISTS users (
+    id              INT PRIMARY KEY AUTO_INCREMENT,
+    email           VARCHAR(255) NOT NULL COMMENT '邮箱（登录账号）',
+    hashed_password VARCHAR(255) NOT NULL COMMENT 'bcrypt 哈希密码',
+    role            ENUM('student', 'admin') NOT NULL DEFAULT 'student',
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_email (email)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
+
 -- JLPT 题库三表结构
 -- 对应 README「数据库设计」章节：question_groups 1─N questions 1─N options
 -- 单选题视为「只含一道子题」的题组，以统一支持完形填空/阅读理解等多子题题型。

@@ -6,7 +6,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api.routers import agent, exams, questions
+from backend.api.routers import agent, auth, exams, questions
 
 app = FastAPI(
     title="JapanesePassAgent API",
@@ -23,6 +23,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(questions.router)
 app.include_router(exams.router)
 app.include_router(agent.router)

@@ -8,7 +8,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from backend.api.deps import get_db
+from backend.api.deps import get_db, require_admin
 from backend.schemas.question import (
     OptionOut,
     QuestionGroupCreate,
@@ -206,7 +206,7 @@ def get_question_group(group_id: int, conn=Depends(get_db)):
 
 
 @router.post("/questions", response_model=QuestionGroupOut, status_code=status.HTTP_201_CREATED)
-def create_question_group(payload: QuestionGroupCreate, conn=Depends(get_db)):
+def create_question_group(payload: QuestionGroupCreate, conn=Depends(get_db), _=Depends(require_admin)):
     try:
         with conn.cursor() as cursor:
             group_id = _insert_group_rows(cursor, payload)
@@ -219,7 +219,7 @@ def create_question_group(payload: QuestionGroupCreate, conn=Depends(get_db)):
 
 
 @router.put("/questions/{group_id}", response_model=QuestionGroupOut)
-def replace_question_group(group_id: int, payload: QuestionGroupCreate, conn=Depends(get_db)):
+def replace_question_group(group_id: int, payload: QuestionGroupCreate, conn=Depends(get_db), _=Depends(require_admin)):
     try:
         with conn.cursor() as cursor:
             cursor.execute("SELECT id FROM question_groups WHERE id = %s", (group_id,))
@@ -253,7 +253,7 @@ def replace_question_group(group_id: int, payload: QuestionGroupCreate, conn=Dep
 
 
 @router.delete("/questions/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_question_group(group_id: int, conn=Depends(get_db)):
+def delete_question_group(group_id: int, conn=Depends(get_db), _=Depends(require_admin)):
     try:
         with conn.cursor() as cursor:
             cursor.execute("DELETE FROM question_groups WHERE id = %s", (group_id,))

@@ -1,10 +1,4 @@
-import axios from 'axios'
-
-// baseURL 走 vite proxy（/api → 后端 FastAPI），生产可改为真实域名
-const http = axios.create({
-  baseURL: '/api/v1',
-  timeout: 15000,
-})
+import http from './http'
 
 /**
  * 题目列表（分页 + 筛选）
