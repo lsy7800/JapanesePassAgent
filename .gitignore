@@ -19,3 +19,4 @@ data/cookies.json
 .DS_Store
 .idea/
 .factory/
+.claude/

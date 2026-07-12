@@ -56,3 +56,7 @@ DEEPSEEK_MODEL = get("DEEPSEEK_MODEL", "deepseek-chat")
 
 # ========== 爬虫配置 ==========
 SPIDER_BASE_URL = get("SPIDER_BASE_URL", "http://account.for-test.cn")
+
+# ========== 服务配置 ==========
+API_HOST = get("API_HOST", "0.0.0.0")
+API_PORT = int(get("API_PORT", "8000"))
