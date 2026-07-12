@@ -10,8 +10,8 @@ CREATE TABLE IF NOT EXISTS question_groups (
     exam_date        VARCHAR(20) DEFAULT '' COMMENT '考试日期，如 2023-07',
     difficulty       TINYINT DEFAULT 0 COMMENT '难度评级（1-9）',
     knowledge_points JSON DEFAULT NULL COMMENT '知识点标签数组',
-    source           VARCHAR(100) DEFAULT '' COMMENT '数据来源标识',
-    source_ref       VARCHAR(100) DEFAULT '' COMMENT '来源内唯一标识（如 result_67#1），用于幂等去重',
+    source           VARCHAR(100) DEFAULT NULL COMMENT '数据来源标识',
+    source_ref       VARCHAR(100) DEFAULT NULL COMMENT '来源内唯一标识（如 result_67#1），用于幂等去重；API 手动创建时为 NULL',
     created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uk_source_ref (source_ref)
