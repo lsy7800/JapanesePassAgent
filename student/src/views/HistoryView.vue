@@ -50,34 +50,60 @@ onMounted(load)
       <span class="sub">共 {{ total }} 次已提交</span>
     </div>
 
-    <el-empty v-if="!loading && items.length === 0" description="还没有考试记录，去考一套吧" >
+    <el-empty v-if="!loading && items.length === 0" description="还没有考试记录，去考一套吧">
       <el-button type="primary" @click="router.push('/exam')">去考试</el-button>
     </el-empty>
 
-    <el-table v-else v-loading="loading" :data="items" stripe style="width:100%">
-      <el-table-column prop="submitted_at" label="提交时间" width="160" />
-      <el-table-column prop="level" label="级别" width="80">
-        <template #default="{ row }">
-          <el-tag size="small" type="info">{{ row.level || '综合' }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="total" label="题数" width="70" align="center" />
-      <el-table-column label="得分" width="90" align="center">
-        <template #default="{ row }">
-          <b>{{ row.score }}</b> / {{ row.total }}
-        </template>
-      </el-table-column>
-      <el-table-column label="正确率" width="100" align="center">
-        <template #default="{ row }">
-          <el-tag :type="accuracyType(row)" size="small">{{ accuracy(row) }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" align="center">
-        <template #default="{ row }">
-          <el-button size="small" type="primary" link @click="viewResult(row.id)">查看详情</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <template v-else>
+      <!-- 桌面：表格 -->
+      <el-table
+        v-loading="loading"
+        :data="items"
+        stripe
+        style="width:100%"
+        class="desktop-table"
+      >
+        <el-table-column prop="submitted_at" label="提交时间" min-width="140" />
+        <el-table-column prop="level" label="级别" width="80">
+          <template #default="{ row }">
+            <el-tag size="small" type="info">{{ row.level || '综合' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="total" label="题数" width="70" align="center" />
+        <el-table-column label="得分" width="90" align="center">
+          <template #default="{ row }">
+            <b>{{ row.score }}</b> / {{ row.total }}
+          </template>
+        </el-table-column>
+        <el-table-column label="正确率" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag :type="accuracyType(row)" size="small">{{ accuracy(row) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="90" align="center">
+          <template #default="{ row }">
+            <el-button size="small" type="primary" link @click="viewResult(row.id)">详情</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <!-- 移动端：卡片列表 -->
+      <div v-loading="loading" class="mobile-list">
+        <div
+          v-for="row in items"
+          :key="row.id"
+          class="history-card"
+          @click="viewResult(row.id)"
+        >
+          <div class="hc-top">
+            <el-tag size="small" type="info">{{ row.level || '综合' }}</el-tag>
+            <el-tag :type="accuracyType(row)" size="small">{{ accuracy(row) }}</el-tag>
+            <span class="hc-score"><b>{{ row.score }}</b>/{{ row.total }}</span>
+          </div>
+          <div class="hc-time">{{ row.submitted_at }}</div>
+        </div>
+      </div>
+    </template>
 
     <div v-if="total > PAGE_SIZE" class="pagination">
       <el-pagination
@@ -85,6 +111,7 @@ onMounted(load)
         :page-size="PAGE_SIZE"
         :total="total"
         layout="prev, pager, next"
+        small
         @current-change="load"
       />
     </div>
@@ -94,6 +121,7 @@ onMounted(load)
 <style scoped>
 .history-wrap {
   max-width: 820px;
+  margin: 0 auto;
 }
 .history-head {
   display: flex;
@@ -101,13 +129,34 @@ onMounted(load)
   gap: 12px;
   margin-bottom: 16px;
 }
-.sub {
-  font-size: 13px;
-  color: #909399;
+.sub { font-size: 13px; color: #909399; }
+.pagination { margin-top: 16px; display: flex; justify-content: center; }
+
+/* 移动端卡片默认隐藏 */
+.mobile-list { display: none; }
+
+.history-card {
+  background: #fff;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: box-shadow 0.2s;
+  active-transform: scale(0.99);
 }
-.pagination {
-  margin-top: 16px;
+.history-card:active { box-shadow: 0 0 0 2px #409eff40; }
+.hc-top {
   display: flex;
-  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.hc-score { margin-left: auto; font-size: 15px; color: #303133; }
+.hc-time { font-size: 12px; color: #909399; }
+
+@media (max-width: 640px) {
+  .desktop-table { display: none; }
+  .mobile-list { display: block; }
 }
 </style>

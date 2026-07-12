@@ -124,50 +124,62 @@ onUnmounted(stopTimer)
 
 <template>
   <div class="exam-wrap">
-    <!-- 阶段1：组卷配置 -->
+    <!-- 组卷配置 -->
     <el-card v-if="phase === 'config'" shadow="never">
       <template #header><b>组卷配置</b></template>
-      <el-form label-width="100px" style="max-width: 560px">
-        <el-form-item label="级别">
-          <el-select v-model="config.level" clearable style="width: 160px">
-            <el-option v-for="l in LEVEL_OPTIONS" :key="l" :label="l" :value="l" />
-          </el-select>
-        </el-form-item>
+      <el-form label-position="top" class="config-form">
+        <div class="form-row">
+          <el-form-item label="级别" class="form-item-sm">
+            <el-select v-model="config.level" clearable style="width:100%">
+              <el-option v-for="l in LEVEL_OPTIONS" :key="l" :label="l" :value="l" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="题目数" class="form-item-sm">
+            <el-input-number v-model="config.total_questions" :min="1" :max="50" style="width:100%" />
+          </el-form-item>
+        </div>
+
         <el-form-item label="题型">
-          <el-select v-model="config.types" multiple placeholder="全部" style="width: 320px">
+          <el-select v-model="config.types" multiple placeholder="全部题型" style="width:100%">
             <el-option v-for="t in TYPE_OPTIONS" :key="t.value" :label="t.label" :value="t.value" />
           </el-select>
         </el-form-item>
-        <el-form-item label="题目数">
-          <el-input-number v-model="config.total_questions" :min="1" :max="50" />
-        </el-form-item>
+
         <el-form-item label="限定难度">
-          <el-switch v-model="useDifficulty" />
-          <template v-if="useDifficulty">
-            <el-input-number v-model="diffMin" :min="0" :max="9" style="width: 100px; margin-left: 12px" />
-            <span style="margin: 0 6px">-</span>
-            <el-input-number v-model="diffMax" :min="0" :max="9" style="width: 100px" />
-          </template>
+          <div class="difficulty-row">
+            <el-switch v-model="useDifficulty" />
+            <template v-if="useDifficulty">
+              <el-input-number v-model="diffMin" :min="0" :max="9" class="diff-num" />
+              <span class="sep">—</span>
+              <el-input-number v-model="diffMax" :min="0" :max="9" class="diff-num" />
+            </template>
+          </div>
         </el-form-item>
-        <el-form-item label="限时(分钟)">
-          <el-input-number v-model="config.time_limit_minutes" :min="0" :max="180" />
-          <span style="margin-left: 8px; color: #999">0 为不限时</span>
+
+        <el-form-item label="限时（分钟，0 为不限时）">
+          <el-input-number v-model="config.time_limit_minutes" :min="0" :max="180" style="width:100%" />
         </el-form-item>
+
         <el-form-item>
-          <el-button type="primary" :loading="loading" @click="onGenerate">开始考试</el-button>
+          <el-button type="primary" :loading="loading" style="width:100%" @click="onGenerate">
+            开始考试
+          </el-button>
         </el-form-item>
       </el-form>
     </el-card>
 
-    <!-- 阶段2：答题 -->
+    <!-- 答题阶段 -->
     <div v-else-if="phase === 'answering'">
       <el-affix :offset="0">
         <div class="answer-bar">
-          <span>共 {{ exam.total }} 题 · 已答 <b>{{ answeredCount }}</b> / {{ exam.total }}</span>
+          <span class="bar-info">
+            共 {{ exam.total }} 题 · 已答 <b>{{ answeredCount }}</b>/{{ exam.total }}
+          </span>
           <span v-if="exam.time_limit > 0" class="timer">⏱ {{ fmtTime(remaining) }}</span>
-          <el-button type="primary" :loading="loading" @click="onSubmit">交卷</el-button>
+          <el-button type="primary" size="small" :loading="loading" @click="onSubmit">交卷</el-button>
         </div>
       </el-affix>
+
       <el-card v-for="item in exam.items" :key="item.seq" shadow="never" class="q-card">
         <div class="q-title">
           <span class="q-seq">第 {{ item.seq }} 题</span>
@@ -188,22 +200,50 @@ onUnmounted(stopTimer)
 </template>
 
 <style scoped>
-.exam-wrap { max-width: 820px; }
+.exam-wrap {
+  max-width: 820px;
+  margin: 0 auto;
+}
+
+/* 配置表单 */
+.config-form { max-width: 560px; }
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 16px;
+}
+.difficulty-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.diff-num { width: 90px; }
+.sep { color: #909399; }
+
+/* 答题栏 */
 .answer-bar {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 12px;
   background: #fff;
-  padding: 12px 16px;
+  padding: 10px 14px;
   border-bottom: 1px solid #ebeef5;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 2px 8px rgba(0,0,0,.05);
 }
-.answer-bar .timer { color: #e6a23c; font-weight: 600; }
-.answer-bar .el-button { margin-left: auto; }
-.q-card { margin-top: 16px; }
-.q-title { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.bar-info { flex: 1; font-size: 13px; }
+.timer { color: #e6a23c; font-weight: 600; font-size: 13px; }
+
+.q-card { margin-top: 14px; }
+.q-title { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .q-seq { font-weight: 600; }
-.q-content { font-size: 16px; line-height: 1.7; margin-bottom: 14px; }
+.q-content { font-size: 15px; line-height: 1.7; margin-bottom: 14px; }
 .q-options { display: flex; flex-direction: column; gap: 10px; }
 .q-option { height: auto; white-space: normal; line-height: 1.6; }
+
+@media (max-width: 480px) {
+  .form-row { grid-template-columns: 1fr; }
+  .diff-num { width: 80px; }
+  .q-content { font-size: 14px; }
+}
 </style>

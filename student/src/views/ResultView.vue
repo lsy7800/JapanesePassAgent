@@ -12,13 +12,9 @@ const loading = ref(true)
 const result = ref(null)
 const accuracy = ref(0)
 
-// 每道题的 AI 解析状态：{ [seq]: { text, streaming, error } }
 const judgeState = ref({})
-
-// 薄弱点分析状态
 const weakState = ref({ text: '', streaming: false, done: false, error: false })
 
-// 关闭当前 SSE 连接的函数（最多同时一个）
 let closeCurrentStream = null
 
 function renderMd(text) {
@@ -55,9 +51,7 @@ function judgeItem(item) {
   judgeState.value[item.seq] = { text: '', streaming: true, error: false }
 
   closeCurrentStream = chatStream(message, null, {
-    onToken(content) {
-      judgeState.value[item.seq].text += content
-    },
+    onToken(content) { judgeState.value[item.seq].text += content },
     onDone() {
       judgeState.value[item.seq].streaming = false
       closeCurrentStream = null
@@ -74,27 +68,26 @@ function judgeItem(item) {
 function analyzeWeak() {
   if (weakState.value.streaming) return
   closeCurrentStream?.()
-
   weakState.value = { text: '', streaming: true, done: false, error: false }
 
-  const message = `请用 analyze_weak_points 工具分析试卷 ${props.id} 的薄弱知识点`
-
-  closeCurrentStream = chatStream(message, null, {
-    onToken(content) {
-      weakState.value.text += content
+  closeCurrentStream = chatStream(
+    `请用 analyze_weak_points 工具分析试卷 ${props.id} 的薄弱知识点`,
+    null,
+    {
+      onToken(content) { weakState.value.text += content },
+      onDone() {
+        weakState.value.streaming = false
+        weakState.value.done = true
+        closeCurrentStream = null
+      },
+      onError(detail) {
+        weakState.value.streaming = false
+        weakState.value.error = true
+        ElMessage.error('薄弱点分析失败：' + detail)
+        closeCurrentStream = null
+      },
     },
-    onDone() {
-      weakState.value.streaming = false
-      weakState.value.done = true
-      closeCurrentStream = null
-    },
-    onError(detail) {
-      weakState.value.streaming = false
-      weakState.value.error = true
-      ElMessage.error('薄弱点分析失败：' + detail)
-      closeCurrentStream = null
-    },
-  })
+  )
 }
 
 onMounted(load)
@@ -105,14 +98,16 @@ onMounted(load)
     <template v-if="result">
       <!-- 得分卡 -->
       <el-card shadow="never" class="score-card">
-        <div class="score-main">
-          <div class="score-num">{{ result.score }} / {{ result.total }}</div>
-          <div class="score-label">正确率 {{ accuracy }}%</div>
-        </div>
-        <div class="score-actions">
-          <el-tag type="info" size="small">{{ result.level || '综合' }}</el-tag>
-          <el-button @click="router.push('/history')">返回历史</el-button>
-          <el-button type="primary" @click="router.push('/exam')">再考一套</el-button>
+        <div class="score-body">
+          <div class="score-left">
+            <div class="score-num">{{ result.score }} / {{ result.total }}</div>
+            <div class="score-label">正确率 {{ accuracy }}%</div>
+          </div>
+          <div class="score-actions">
+            <el-tag type="info" size="small">{{ result.level || '综合' }}</el-tag>
+            <el-button size="small" @click="router.push('/history')">返回历史</el-button>
+            <el-button size="small" type="primary" @click="router.push('/exam')">再考一套</el-button>
+          </div>
         </div>
       </el-card>
 
@@ -123,14 +118,13 @@ onMounted(load)
           <el-tag :type="item.is_correct ? 'success' : 'danger'" size="small">
             {{ item.is_correct ? '正确' : '错误' }}
           </el-tag>
-          <!-- 错题才显示 AI 解析按钮 -->
           <el-button
             v-if="!item.is_correct"
             size="small"
             type="primary"
             plain
             :loading="judgeState[item.seq]?.streaming"
-            style="margin-left: auto"
+            class="ai-btn"
             @click="judgeItem(item)"
           >
             {{ judgeState[item.seq]?.text ? '重新解析' : 'AI 解析' }}
@@ -158,10 +152,9 @@ onMounted(load)
         <div v-if="!item.user_answer" class="unanswered">（未作答）</div>
         <div v-if="item.analysis" class="analysis">{{ item.analysis }}</div>
 
-        <!-- AI 解析输出区 -->
         <div v-if="judgeState[item.seq]?.text || judgeState[item.seq]?.streaming" class="ai-analysis">
           <div class="ai-label">🤖 AI 解析</div>
-          <div class="md" v-html="renderMd(judgeState[item.seq].text)"></div>
+          <div class="md" v-html="renderMd(judgeState[item.seq].text)" />
           <span v-if="judgeState[item.seq]?.streaming" class="cursor">▍</span>
         </div>
       </el-card>
@@ -190,7 +183,7 @@ onMounted(load)
           点击「开始分析」，AI 将根据错题分析你的知识薄弱点
         </div>
         <div v-else>
-          <div class="md" v-html="renderMd(weakState.text)"></div>
+          <div class="md" v-html="renderMd(weakState.text)" />
           <span v-if="weakState.streaming" class="cursor">▍</span>
         </div>
       </el-card>
@@ -199,50 +192,74 @@ onMounted(load)
 </template>
 
 <style scoped>
-.result-wrap { max-width: 820px; }
+.result-wrap {
+  max-width: 820px;
+  margin: 0 auto;
+}
 
-.score-card :deep(.el-card__body) {
+/* 得分卡 */
+.score-body {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 16px;
   flex-wrap: wrap;
 }
-.score-main { flex: 1; min-width: 120px; }
-.score-num { font-size: 32px; font-weight: 700; color: #409eff; }
-.score-label { color: #999; margin-top: 4px; }
+.score-left { flex: 1; min-width: 100px; }
+.score-num { font-size: 30px; font-weight: 700; color: #409eff; }
+.score-label { color: #999; margin-top: 4px; font-size: 13px; }
 .score-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
-.q-card { margin-top: 16px; }
-.q-title { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+/* 题目卡 */
+.q-card { margin-top: 14px; }
+.q-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
 .q-seq { font-weight: 600; }
-.q-content { font-size: 16px; line-height: 1.7; margin-bottom: 14px; }
+.ai-btn { margin-left: auto; }
+.q-content { font-size: 15px; line-height: 1.7; margin-bottom: 12px; }
 
 .opt-list { display: flex; flex-direction: column; gap: 8px; }
-.opt-row { padding: 8px 12px; border-radius: 6px; background: #f5f7fa; line-height: 1.6; }
+.opt-row {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #f5f7fa;
+  line-height: 1.6;
+  word-break: break-word;
+}
 .opt-row.correct { background: #f0f9eb; color: #67c23a; }
-.opt-row.wrong { background: #fef0f0; color: #f56c6c; }
-.opt-row .mark { margin-left: 8px; font-size: 12px; font-weight: 600; }
-.unanswered { color: #e6a23c; margin-top: 8px; }
+.opt-row.wrong   { background: #fef0f0; color: #f56c6c; }
+.opt-row .mark   { margin-left: 8px; font-size: 12px; font-weight: 600; }
+.unanswered { color: #e6a23c; margin-top: 8px; font-size: 13px; }
 .analysis {
-  margin-top: 12px; padding: 12px;
-  background: #fafafa; border-left: 3px solid #409eff;
-  white-space: pre-wrap; line-height: 1.7; color: #555;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #fafafa;
+  border-left: 3px solid #409eff;
+  white-space: pre-wrap;
+  line-height: 1.7;
+  color: #555;
+  font-size: 13px;
 }
 
 .ai-analysis {
-  margin-top: 14px;
+  margin-top: 12px;
   padding: 12px 14px;
   background: #f0f7ff;
   border-left: 3px solid #409eff;
   border-radius: 0 6px 6px 0;
 }
-.ai-label { font-size: 12px; color: #409eff; font-weight: 600; margin-bottom: 8px; }
+.ai-label { font-size: 12px; color: #409eff; font-weight: 600; margin-bottom: 6px; }
 
-.weak-card { margin-top: 24px; }
+.weak-card { margin-top: 20px; }
 .weak-head { display: flex; align-items: center; justify-content: space-between; }
-.weak-empty { color: #999; text-align: center; padding: 20px 0; }
+.weak-empty  { color: #999; text-align: center; padding: 20px 0; }
 .weak-perfect { color: #67c23a; text-align: center; padding: 20px 0; font-weight: 600; }
 
+/* 流式光标 */
 .cursor {
   display: inline-block;
   animation: blink 0.8s step-end infinite;
@@ -255,10 +272,30 @@ onMounted(load)
   50%       { opacity: 0; }
 }
 
-.md :deep(p) { margin: 6px 0; }
+/* markdown */
+.md :deep(p)  { margin: 6px 0; }
 .md :deep(h1),.md :deep(h2),.md :deep(h3) { margin: 10px 0 6px; }
 .md :deep(ul),.md :deep(ol) { padding-left: 20px; margin: 6px 0; }
 .md :deep(li) { margin: 4px 0; line-height: 1.6; }
 .md :deep(pre) { background: #f5f7fa; padding: 10px; border-radius: 6px; overflow-x: auto; }
-.md :deep(code) { background: #f5f7fa; padding: 1px 4px; border-radius: 3px; }
+.md :deep(code) { background: #f5f7fa; padding: 1px 4px; border-radius: 3px; font-size: 13px; }
+.md :deep(table) {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  min-width: 100%;
+}
+.md :deep(th),.md :deep(td) {
+  border: 1px solid #dcdfe6;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+.md :deep(th) { background: #f5f7fa; }
+
+@media (max-width: 480px) {
+  .score-num { font-size: 26px; }
+  .q-content { font-size: 14px; }
+  .ai-btn { width: 100%; margin-left: 0; margin-top: 4px; }
+}
 </style>

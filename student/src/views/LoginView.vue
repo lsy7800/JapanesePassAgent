@@ -9,7 +9,7 @@ const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 
-const mode = ref('login') // 'login' | 'register'
+const mode = ref('login')
 const loading = ref(false)
 const form = reactive({ email: '', password: '', confirm: '' })
 
@@ -78,9 +78,11 @@ async function submit() {
   align-items: center;
   justify-content: center;
   background: #f5f7fa;
+  padding: 16px;
 }
 .login-card {
-  width: 380px;
+  width: 100%;
+  max-width: 380px;
 }
 .login-title {
   text-align: center;
