@@ -2,7 +2,9 @@
 import { ref, nextTick } from 'vue'
 import { marked } from 'marked'
 import { ElMessage } from 'element-plus'
+import { Download } from '@element-plus/icons-vue'
 import { chatStream } from '../api/agent'
+import { downloadExam } from '../api/exam'
 
 const EXAMPLES = [
   '帮我出2道N1的题',
@@ -15,12 +17,25 @@ const input = ref('')
 const sending = ref(false)
 const sessionId = ref(null)
 const listRef = ref(null)
+const downloading = ref(false)
 
 let streamingIdx = -1
 let closeStream = null
 
 function renderMd(text) {
   return marked.parse(text || '')
+}
+
+async function onDownload(exp) {
+  if (downloading.value) return
+  downloading.value = true
+  try {
+    await downloadExam(exp.exam_id, { withAnswers: exp.with_answers })
+  } catch (e) {
+    ElMessage.error('下载失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    downloading.value = false
+  }
 }
 
 async function scrollBottom() {
@@ -37,7 +52,7 @@ async function send(text) {
   messages.value.push({ role: 'user', content: msg })
   scrollBottom()
 
-  messages.value.push({ role: 'assistant', content: '', tools: [], streaming: true })
+  messages.value.push({ role: 'assistant', content: '', tools: [], exports: [], streaming: true })
   streamingIdx = messages.value.length - 1
   sending.value = true
 
@@ -46,8 +61,15 @@ async function send(text) {
       messages.value[streamingIdx].content += content
       scrollBottom()
     },
-    onTool(name) {
+    onTool(name, args) {
       messages.value[streamingIdx].tools.push(name)
+      // 捕获导出工具调用 → 渲染下载按钮（exam_id 来自工具参数，可靠）
+      if (name === 'export_exam' && args && args.exam_id != null) {
+        messages.value[streamingIdx].exports.push({
+          exam_id: args.exam_id,
+          with_answers: !!args.with_answers,
+        })
+      }
     },
     onDone(sid) {
       sessionId.value = sid
@@ -114,6 +136,21 @@ function newSession() {
               🔧 {{ t }}
             </el-tag>
           </div>
+          <!-- 导出下载按钮：来自 export_exam 工具调用 -->
+          <div v-if="m.exports && m.exports.length" class="exports">
+            <el-button
+              v-for="(exp, ei) in m.exports"
+              :key="ei"
+              type="primary"
+              plain
+              size="small"
+              :loading="downloading"
+              @click="onDownload(exp)"
+            >
+              <el-icon style="margin-right: 4px"><Download /></el-icon>
+              下载试卷{{ exp.with_answers ? '（含答案）' : '' }}
+            </el-button>
+          </div>
         </div>
       </div>
     </div>
@@ -137,8 +174,8 @@ function newSession() {
 .chat-wrap {
   display: flex;
   flex-direction: column;
-  /* 填满 el-main，el-main 默认 padding 20px 上下，高度 100vh - 50px header（移动）或 0（桌面） */
-  height: calc(100vh - 60px);
+  /* 填满 app-main 内容区，由内部 .chat-list 滚动，避免页面整体滚动 */
+  height: 100%;
   max-width: 860px;
   margin: 0 auto;
 }
@@ -189,7 +226,7 @@ function newSession() {
   overflow-x: hidden;
 }
 .msg-row.user .bubble {
-  background: #409eff;
+  background: #f59e0b;
   color: #fff;
   white-space: pre-wrap;
 }
@@ -202,7 +239,7 @@ function newSession() {
 .cursor {
   display: inline-block;
   animation: blink 0.8s step-end infinite;
-  color: #409eff;
+  color: #f59e0b;
   font-weight: 700;
   margin-left: 1px;
 }
@@ -216,6 +253,12 @@ function newSession() {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+.exports {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .chat-input {
@@ -233,8 +276,8 @@ function newSession() {
 .md :deep(h1),.md :deep(h2),.md :deep(h3) { margin: 10px 0 6px; }
 .md :deep(ul),.md :deep(ol) { padding-left: 20px; margin: 6px 0; }
 .md :deep(li) { margin: 4px 0; line-height: 1.6; }
-.md :deep(pre) { background: #f5f7fa; padding: 10px; border-radius: 6px; overflow-x: auto; }
-.md :deep(code) { background: #f5f7fa; padding: 1px 4px; border-radius: 3px; font-size: 13px; }
+.md :deep(pre) { background: #fbf9f4; padding: 10px; border-radius: 6px; overflow-x: auto; }
+.md :deep(code) { background: #fbf9f4; padding: 1px 4px; border-radius: 3px; font-size: 13px; }
 /* 表格可横向滚动，不撑破气泡 */
 .md :deep(table) {
   border-collapse: collapse;
@@ -244,11 +287,11 @@ function newSession() {
   -webkit-overflow-scrolling: touch;
 }
 .md :deep(th),.md :deep(td) { border: 1px solid #dcdfe6; padding: 6px 10px; white-space: nowrap; }
-.md :deep(th) { background: #f5f7fa; }
+.md :deep(th) { background: #fbf9f4; }
 
 @media (max-width: 640px) {
   /* 移动端：减去顶部导航栏 50px 和 el-main padding 24px */
-  .chat-wrap { height: calc(100vh - 50px - 24px); }
+  .chat-wrap { height: 100%; }
   .bubble { max-width: 90%; }
   .send-btn { height: 52px; }
 }

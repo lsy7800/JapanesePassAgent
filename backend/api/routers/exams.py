@@ -9,9 +9,12 @@
 判分以题组为单位：当前题库均为单选题（1题组1子题），取题组首道子题的 answer 比对。
 不调用 LLM，纯比对，结果确定。
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from backend.api.deps import get_db, get_current_user
+from backend.api.exam_export import render_exam_markdown
 from backend.schemas.exam import (
     ExamGenerateRequest,
     ExamHistoryResponse,
@@ -93,10 +96,10 @@ def generate_exam(payload: ExamGenerateRequest, conn=Depends(get_db), current_us
     if payload.level:
         where.append("level = %s")
         params.append(payload.level)
-    if payload.types:
-        placeholders = ", ".join(["%s"] * len(payload.types))
-        where.append(f"type IN ({placeholders})")
-        params.extend(payload.types)
+    if payload.categories:
+        placeholders = ", ".join(["%s"] * len(payload.categories))
+        where.append(f"category IN ({placeholders})")
+        params.extend(payload.categories)
     if payload.difficulty_range:
         lo, hi = payload.difficulty_range
         where.append("difficulty BETWEEN %s AND %s")
@@ -262,6 +265,7 @@ def _build_result(conn, exam_id: int) -> ExamResultOut:
                     seq=r["seq"],
                     group_id=r["group_id"],
                     content=q["content"] if q else None,
+                    marked=(q["marked"] or "") if q else "",
                     options=options,
                     user_answer=r["user_answer"],
                     correct_answer=q["answer"] if q else "",
@@ -292,3 +296,43 @@ def get_result(exam_id: int, conn=Depends(get_db), current_user=Depends(get_curr
     if exam["status"] != "submitted":
         raise HTTPException(status_code=409, detail="试卷尚未提交，无结果可查")
     return _build_result(conn, exam_id)
+
+
+@router.get("/{exam_id}/export")
+def export_exam(
+    exam_id: int,
+    format: str = "markdown",
+    with_answers: bool = False,
+    conn=Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """导出试卷为可下载文件。当前支持 format=markdown。
+
+    with_answers=False 仅题目卷；True 追加「答案与解析」一节。
+    需为试卷所有者。前端用带 JWT 的请求拉取，作为附件下载。
+    """
+    if format != "markdown":
+        raise HTTPException(status_code=400, detail=f"暂不支持的导出格式：{format}")
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT user_id FROM exams WHERE id = %s", (exam_id,))
+        exam = cur.fetchone()
+        if exam is None:
+            raise HTTPException(status_code=404, detail=f"试卷 {exam_id} 不存在")
+        if exam["user_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="无权访问该试卷")
+
+        rendered = render_exam_markdown(cur, exam_id, with_answers=with_answers)
+
+    if rendered is None:
+        raise HTTPException(status_code=404, detail=f"试卷 {exam_id} 不存在")
+
+    filename, content = rendered
+    # RFC 5987 文件名编码，兼容中文
+    disposition = f"attachment; filename*=UTF-8''{quote(filename)}"
+    return Response(
+        content=content,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": disposition},
+    )
+

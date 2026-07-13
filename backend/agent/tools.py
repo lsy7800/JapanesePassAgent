@@ -124,6 +124,7 @@ def fetch_questions(
 @tool
 def generate_exam(
     level: str | None = None,
+    category: str | None = None,
     total_questions: int = 10,
     difficulty_min: int | None = None,
     difficulty_max: int | None = None,
@@ -133,6 +134,7 @@ def generate_exam(
 
     参数：
     - level: 级别 N1~N5
+    - category: JLPT 题型 code（如 kanji_reading 汉字读法、context 前后关系）
     - total_questions: 题目数，默认 10，最多 50
     - difficulty_min/difficulty_max: 难度区间 0-9
     - user_id: 当前用户ID（由 Agent 调用方注入，用于关联考试历史）
@@ -145,6 +147,9 @@ def generate_exam(
     if level:
         where.append("level = %s")
         params.append(level)
+    if category:
+        where.append("category = %s")
+        params.append(category)
     if difficulty_min is not None:
         where.append("difficulty >= %s")
         params.append(difficulty_min)
@@ -435,6 +440,38 @@ def recommend_questions(
         conn.close()
 
 
+@tool
+def export_exam(exam_id: int, with_answers: bool = False) -> dict:
+    """把已生成的试卷导出为可下载的 Markdown 文件（供用户下载/打印）。
+
+    使用场景：用户组卷后说「写入 markdown / 导出 / 下载 / 打印」等。
+    必须先有 exam_id（来自 generate_exam 的返回），本工具校验试卷存在。
+
+    参数：
+    - exam_id: generate_exam 返回的试卷 ID
+    - with_answers: 是否在文件末尾附「答案与解析」，默认 False（仅题目卷）
+
+    返回 {ok, exam_id, with_answers, total, message}。
+    前端会据此提供下载按钮，无需你在回复里粘贴文件内容或链接。
+    """
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, level, total FROM exams WHERE id = %s", (exam_id,))
+            exam = cur.fetchone()
+            if not exam:
+                return {"ok": False, "exam_id": exam_id, "message": f"试卷 {exam_id} 不存在"}
+        return {
+            "ok": True,
+            "exam_id": exam_id,
+            "with_answers": with_answers,
+            "total": exam["total"],
+            "message": "已准备好下载文件，请点击下方「下载试卷」按钮。",
+        }
+    finally:
+        conn.close()
+
+
 ALL_TOOLS = [
     fetch_questions,
     generate_exam,
@@ -442,4 +479,5 @@ ALL_TOOLS = [
     answer_judge,
     analyze_weak_points,
     recommend_questions,
+    export_exam,
 ]
