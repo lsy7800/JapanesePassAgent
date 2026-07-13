@@ -1,0 +1,200 @@
+/* 黑金主题 (Plan B) —— 黑色框架 + 琥珀金强调色，内容区保持浅色
+   主色 #F59E0B 琥珀金 / 主色深 #D97706 / 主色浅 #FCD34D / 淡金 #FEF3C7
+   状态：成功 #22C55E 警告 #F59E0B 错误 #EF4444 中性 #64748B
+   必须在 element-plus/dist/index.css 之后引入 */
+
+:root {
+  /* ── 主色：琥珀金 (amber-500) ── */
+  --brand: #f59e0b;
+  --brand-bright: #fbbf24;
+  --el-color-primary: #f59e0b;
+  --el-color-primary-light-3: #fbbf24;
+  --el-color-primary-light-5: #fcd34d;
+  --el-color-primary-light-7: #fde68a;
+  --el-color-primary-light-8: #fef3c7;
+  --el-color-primary-light-9: #fffbeb;
+  --el-color-primary-dark-2: #d97706;
+
+  /* ── 成功：绿 ── */
+  --el-color-success: #22c55e;
+  --el-color-success-light-3: #4ade80;
+  --el-color-success-light-5: #86efac;
+  --el-color-success-light-7: #bbf7d0;
+  --el-color-success-light-8: #dcfce7;
+  --el-color-success-light-9: #f0fdf4;
+  --el-color-success-dark-2: #16a34a;
+
+  /* ── 危险：红 ── */
+  --el-color-danger: #ef4444;
+  --el-color-danger-light-3: #f87171;
+  --el-color-danger-light-5: #fca5a5;
+  --el-color-danger-light-7: #fecaca;
+  --el-color-danger-light-8: #fee2e2;
+  --el-color-danger-light-9: #fef2f2;
+  --el-color-danger-dark-2: #dc2626;
+
+  /* ── 警告：橙红（与金色主色区分） ── */
+  --el-color-warning: #ea580c;
+  --el-color-warning-light-3: #fb923c;
+  --el-color-warning-light-5: #fdba74;
+  --el-color-warning-light-7: #fed7aa;
+  --el-color-warning-light-8: #ffedd5;
+  --el-color-warning-light-9: #fff7ed;
+  --el-color-warning-dark-2: #c2410c;
+
+  /* ── info 中性板岩灰 ── */
+  --el-color-info: #64748b;
+  --el-color-info-light-3: #94a3b8;
+  --el-color-info-light-5: #cbd5e1;
+  --el-color-info-light-7: #e2e8f0;
+  --el-color-info-light-8: #eef2f6;
+  --el-color-info-light-9: #f8fafc;
+  --el-color-info-dark-2: #475569;
+
+  /* ── 圆角 4/8/12/16 ── */
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 6px;
+  --el-border-radius-round: 20px;
+}
+
+/* 全局字体渲染与排版优化 */
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif;
+  color: #1f2937;
+}
+
+/* 卡片：默认柔和阴影 + 去掉硬边框，更轻盈 */
+.el-card {
+  border-radius: 12px;
+  border: none;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+.el-card.is-hover-shadow:hover,
+.el-card:hover {
+  box-shadow: 0 8px 24px rgba(245, 158, 11, 0.1), 0 2px 6px rgba(15, 23, 42, 0.05);
+}
+.el-card__header {
+  border-bottom: 1px solid #f0f2f7;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+/* 表格：圆角 + 表头层次 + 行 hover */
+.el-table {
+  border-radius: 10px;
+  overflow: hidden;
+}
+.el-table th.el-table__cell {
+  background: #f8fafc !important;
+  color: #475569;
+  font-weight: 600;
+}
+.el-table tr:hover > td {
+  background: #fffbeb !important;
+}
+.el-table--border,
+.el-table--border .el-table__cell {
+  border-color: #eef1f6;
+}
+
+/* 输入框聚焦：蓝色光晕 */
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused,
+.el-textarea__inner:focus {
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.12) !important;
+}
+.el-input__wrapper {
+  box-shadow: 0 0 0 1px #e2e8f0 inset;
+  transition: box-shadow 0.2s;
+}
+.el-input__wrapper:hover {
+  box-shadow: 0 0 0 1px #fde68a inset;
+}
+
+/* 分页器圆角 */
+.el-pagination .el-pager li {
+  border-radius: 6px;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* 过渡更顺滑 */
+.el-button,
+.el-tag,
+.el-card,
+.el-input__wrapper,
+.el-menu-item {
+  transition: all 0.2s ease;
+}
+
+/* 圆角统一 */
+.el-tag { border-radius: 6px; }
+.el-button { border-radius: 8px; }
+.el-input__wrapper { border-radius: 8px; }
+.el-select__wrapper { border-radius: 8px; }
+.el-textarea__inner { border-radius: 8px; }
+
+/* 主按钮蓝色渐变 */
+.el-button--primary {
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+  border-color: #f59e0b;
+}
+.el-button--primary:hover {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  border-color: #d97706;
+}
+
+/* ── 日语正文使用明朝体（MS YUMincho / 游明朝），提升阅读观感 ── */
+/* 只作用于纯日文内容（题干/选项/文章），不覆盖中文解析与 UI 控件，
+   以免中文汉字被渲染为日文新字形 */
+.q-content,
+.q-option,
+.opt-row,
+.wrong-content,
+.option-item,
+.article-text,
+.exam-article {
+  font-family: 'Yu Mincho', 'YuMincho', 'MS YUMincho', 'MS PMincho',
+    'Hiragino Mincho ProN', 'Hiragino Mincho Pro', serif;
+}
+
+/* ── 划线词（marked）金色下划线 ── */
+.marked-word {
+  text-decoration: underline;
+  text-decoration-color: #f59e0b;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+  font-weight: 500;
+}
+
+/* ── 校对页题干/文章编辑框也用明朝，便于校对日文 ── */
+.jp-input .el-textarea__inner,
+.jp-input .el-input__inner {
+  font-family: 'Yu Mincho', 'YuMincho', 'MS YUMincho', 'MS PMincho',
+    'Hiragino Mincho ProN', 'Hiragino Mincho Pro', serif;
+  line-height: 1.7;
+}
+
+/* 注：AI markdown 输出（.md）含中文解释，不套用日文明朝体——
+   否则中文汉字会以日文新字形显示。仅纯日文题干预用明朝（见上方 .q-content 规则）。 */
+
+

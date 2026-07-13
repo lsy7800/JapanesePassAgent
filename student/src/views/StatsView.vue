@@ -89,14 +89,12 @@ function accuracyColor(acc) {
 function barColor(rate) {
   if (rate >= 70) return '#f56c6c'
   if (rate >= 40) return '#e6a23c'
-  return '#409eff'
+  return '#f59e0b'
 }
 </script>
 
 <template>
   <div class="stats-page">
-    <h2 class="page-title">学习分析</h2>
-
     <!-- 薄弱知识点 -->
     <el-card class="section-card" v-loading="weakLoading">
       <template #header>
@@ -375,8 +373,8 @@ function barColor(rate) {
   transition: background 0.2s;
   min-height: 44px;
 }
-.wrong-top:hover { background: #f0f5ff; }
-.wrong-top:active { background: #e8f0fe; }
+.wrong-top:hover { background: #fbf9f4; }
+.wrong-top:active { background: #e0e7ff; }
 .level-tag { flex-shrink: 0; }
 .wrong-content {
   flex: 1;

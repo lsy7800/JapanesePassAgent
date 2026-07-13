@@ -46,7 +46,6 @@ onMounted(load)
 <template>
   <div class="history-wrap">
     <div class="history-head">
-      <b>考试历史</b>
       <span class="sub">共 {{ total }} 次已提交</span>
     </div>
 
@@ -145,7 +144,7 @@ onMounted(load)
   transition: box-shadow 0.2s;
   active-transform: scale(0.99);
 }
-.history-card:active { box-shadow: 0 0 0 2px #409eff40; }
+.history-card:active { box-shadow: 0 0 0 2px #f59e0b40; }
 .hc-top {
   display: flex;
   align-items: center;

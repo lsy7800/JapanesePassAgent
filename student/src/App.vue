@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { EditPen, ChatDotRound, SwitchButton, List, TrendCharts, Expand } from '@element-plus/icons-vue'
+import { EditPen, ChatDotRound, SwitchButton, List, TrendCharts, Expand, Link } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth'
 
 const route = useRoute()
@@ -17,6 +17,15 @@ const NAV_ITEMS = [
   { index: '/history', icon: List,         label: '考试历史' },
   { index: '/stats',   icon: TrendCharts,  label: '学习分析' },
 ]
+
+const TITLE_MAP = {
+  exam: '在线考试',
+  chat: 'AI 助手',
+  history: '考试历史',
+  result: '考试结果',
+  stats: '学习分析',
+}
+const pageTitle = computed(() => TITLE_MAP[route.name] || 'JLPT 学习系统')
 
 function logout() {
   auth.logout()
@@ -37,7 +46,10 @@ function navigate(path) {
   <el-container v-else class="app-container">
     <!-- ── 桌面侧边栏 ── -->
     <el-aside class="app-aside desktop-aside" width="200px">
-      <div class="brand">JLPT 学习系统</div>
+      <div class="brand">
+        <span class="brand-mark">あ</span>
+        <span>JLPT 学习系统</span>
+      </div>
       <el-menu :default-active="activeMenu" router class="aside-menu">
         <el-menu-item v-for="item in NAV_ITEMS" :key="item.index" :index="item.index">
           <el-icon><component :is="item.icon" /></el-icon>
@@ -45,21 +57,36 @@ function navigate(path) {
         </el-menu-item>
       </el-menu>
       <div class="aside-footer">
-        <div class="user-info" :title="auth.email">{{ auth.email }}</div>
-        <el-button size="small" text @click="logout">
-          <el-icon><SwitchButton /></el-icon> 退出
+        <a href="https://github.com/lsy7800/JapanesePassAgent" target="_blank" rel="noopener" class="contact-link">
+          <el-icon><Link /></el-icon>
+          <span>GitHub 仓库</span>
+        </a>
+        <el-button class="logout-btn" text @click="logout">
+          <el-icon><SwitchButton /></el-icon>
+          <span>退出登录</span>
         </el-button>
       </div>
     </el-aside>
 
     <!-- ── 主内容区 ── -->
     <el-container class="main-container">
+      <!-- 桌面顶栏 -->
+      <div class="topbar desktop-topbar">
+        <div class="topbar-title">{{ pageTitle }}</div>
+        <div class="topbar-right">
+          <span class="topbar-user" :title="auth.email">{{ auth.email }}</span>
+          <el-button text class="topbar-logout" @click="logout">
+            <el-icon><SwitchButton /></el-icon> 退出
+          </el-button>
+        </div>
+      </div>
+
       <!-- 移动端顶部导航栏 -->
       <div class="mobile-header">
         <el-button class="hamburger" text @click="drawerOpen = true">
           <el-icon size="22"><Expand /></el-icon>
         </el-button>
-        <span class="mobile-title">JLPT 学习系统</span>
+        <span class="mobile-title">{{ pageTitle }}</span>
         <el-button size="small" text class="mobile-logout" @click="logout">
           <el-icon><SwitchButton /></el-icon>
         </el-button>
@@ -68,6 +95,14 @@ function navigate(path) {
       <el-main class="app-main">
         <router-view />
       </el-main>
+
+      <footer v-if="route.name !== 'chat'" class="app-footer">
+        <span>© 2026 JapanesePassAgent · JLPT 智能题库系统</span>
+        <span class="footer-tech">
+          FastAPI · Vue 3 · LangGraph
+          <a href="https://github.com/lsy7800/JapanesePassAgent" target="_blank" rel="noopener" class="footer-link">GitHub</a>
+        </span>
+      </footer>
     </el-container>
 
     <!-- 移动端抽屉导航 -->
@@ -78,7 +113,10 @@ function navigate(path) {
       :with-header="false"
       class="nav-drawer"
     >
-      <div class="drawer-brand">JLPT 学习系统</div>
+      <div class="drawer-brand">
+        <span class="brand-mark">あ</span>
+        <span>JLPT 学习系统</span>
+      </div>
       <div
         v-for="item in NAV_ITEMS"
         :key="item.index"
@@ -103,42 +141,126 @@ function navigate(path) {
 * { box-sizing: border-box; }
 body { margin: 0; }
 
-.app-container { min-height: 100vh; }
+.app-container { height: 100vh; overflow: hidden; }
 
 /* ── 桌面侧边栏 ── */
 .app-aside {
-  background: #304156;
+  background: #0b0f19;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
 }
 .brand {
   height: 56px;
-  line-height: 56px;
-  text-align: center;
-  font-size: 17px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 18px;
+  font-size: 16px;
   font-weight: 600;
   color: #fff;
-  background: #263445;
+  background: #050709;
   flex-shrink: 0;
+  letter-spacing: 0.5px;
+}
+.brand .brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #fcd34d 0%, #fbbf24 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 14px;
 }
 .aside-menu {
   border-right: none;
-  background: #304156;
+  background: transparent;
   flex: 1;
+  padding: 10px;
+  box-sizing: border-box;
 }
-.aside-menu .el-menu-item { color: #bfcbd9; }
-.aside-menu .el-menu-item.is-active { color: #fff; background: #409eff; }
-.aside-menu .el-menu-item:hover { background: #263445; }
+.aside-menu .el-menu-item {
+  color: #8b93a7;
+  height: 42px;
+  line-height: 42px;
+  margin: 4px 0;
+  border-radius: 8px;
+  padding: 0 14px !important;
+}
+.aside-menu .el-menu-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+.aside-menu .el-menu-item.is-active {
+  color: #fff;
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
+}
+
+/* ── 侧栏底部：联系方式 + 退出 ── */
 .aside-footer {
-  padding: 12px 16px;
-  border-top: 1px solid #3d5166;
+  flex-shrink: 0;
+  padding: 12px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.contact-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: #8b93a7;
+  text-decoration: none;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+.contact-link:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fbbf24;
+}
+.logout-btn {
+  width: 100%;
+  justify-content: flex-start;
+  height: 38px;
+  padding: 0 10px !important;
+  border-radius: 8px;
+  color: #8b93a7;
+  font-size: 13px;
+}
+.logout-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* ── 桌面顶栏 ── */
+.topbar {
+  height: 56px;
+  flex-shrink: 0;
+  background: #fff;
+  border-bottom: 1px solid #e5e9f2;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-shrink: 0;
-  gap: 6px;
+  padding: 0 32px;
 }
+.topbar-title { font-size: 17px; font-weight: 600; color: #1f2937; }
+.topbar-right { display: flex; align-items: center; gap: 14px; }
+.topbar-user {
+  font-size: 13px;
+  color: #64748b;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar-logout { color: #64748b; }
+.topbar-logout:hover { color: #f59e0b; }
+
 .user-info {
   font-size: 12px;
   color: #bfcbd9;
@@ -148,12 +270,38 @@ body { margin: 0; }
   min-width: 0;
   flex: 1;
 }
-.aside-footer .el-button { color: #bfcbd9; flex-shrink: 0; }
-.aside-footer .el-button:hover { color: #fff; }
 
 /* ── 主区域 ── */
-.main-container { flex: 1; min-width: 0; flex-direction: column; }
-.app-main { background: #f5f7fa; padding: 20px; }
+.main-container { flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
+.app-main {
+  background: #fbf9f4;
+  padding: 24px 32px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* ── 页脚 ── */
+.app-footer {
+  flex-shrink: 0;
+  height: 40px;
+  background: #fff;
+  border-top: 1px solid #eef0f5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 32px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+.footer-tech { display: flex; align-items: center; gap: 12px; }
+.footer-link {
+  color: #fbbf24;
+  text-decoration: none;
+  font-weight: 500;
+}
+.footer-link:hover { text-decoration: underline; }
 
 /* ── 移动端顶部栏（默认隐藏） ── */
 .mobile-header { display: none; }
@@ -162,35 +310,56 @@ body { margin: 0; }
 .nav-drawer .el-drawer__body { padding: 0; display: flex; flex-direction: column; }
 .drawer-brand {
   height: 56px;
-  line-height: 56px;
-  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 18px;
   font-size: 16px;
   font-weight: 600;
   color: #fff;
-  background: #263445;
+  background: #050709;
   flex-shrink: 0;
+  letter-spacing: 0.5px;
+}
+.drawer-brand .brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #fcd34d 0%, #fbbf24 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 14px;
 }
 .drawer-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 20px;
+  padding: 0 14px;
+  height: 42px;
+  margin: 4px 10px;
+  border-radius: 8px;
   cursor: pointer;
-  color: #bfcbd9;
-  background: #304156;
+  color: #8b93a7;
+  background: transparent;
   font-size: 14px;
-  transition: background 0.2s;
+  transition: all 0.2s;
 }
-.drawer-item:hover,
-.drawer-item.active {
-  background: #409eff;
+.drawer-item:hover {
+  background: rgba(255, 255, 255, 0.08);
   color: #fff;
+}
+.drawer-item.active {
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
 }
 .drawer-footer {
   margin-top: auto;
   padding: 12px 16px;
-  border-top: 1px solid #3d5166;
-  background: #304156;
+  border-top: 1px solid #f59e0b;
+  background: #0b0f19;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -202,10 +371,11 @@ body { margin: 0; }
 /* ── 移动端断点 ── */
 @media (max-width: 640px) {
   .desktop-aside { display: none; }
+  .desktop-topbar { display: none; }
   .mobile-header {
     display: flex;
     align-items: center;
-    background: #304156;
+    background: #0b0f19;
     padding: 0 12px;
     height: 50px;
     flex-shrink: 0;
@@ -219,6 +389,6 @@ body { margin: 0; }
     font-weight: 600;
   }
   .mobile-logout { color: #bfcbd9; }
-  .app-main { padding: 12px; }
+  .app-main { padding: 16px; }
 }
 </style>

@@ -17,6 +17,20 @@ const weakState = ref({ text: '', streaming: false, done: false, error: false })
 
 let closeCurrentStream = null
 
+// 渲染题干：划线词标金色下划线（先转义防 XSS）
+function renderContent(content, marked) {
+  if (content == null) return ''
+  let s = String(content)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  if (marked) {
+    const esc = String(marked).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    s = s.replace(new RegExp(esc, 'g'), (m) => `<u class="marked-word">${m}</u>`)
+  }
+  return s.replace(/\n/g, '<br/>')
+}
+
 function renderMd(text) {
   return marked.parse(text || '')
 }
@@ -131,7 +145,7 @@ onMounted(load)
           </el-button>
         </div>
 
-        <div class="q-content">{{ item.content }}</div>
+        <div class="q-content" v-html="renderContent(item.content, item.marked)"></div>
 
         <div class="opt-list">
           <div
@@ -205,7 +219,7 @@ onMounted(load)
   flex-wrap: wrap;
 }
 .score-left { flex: 1; min-width: 100px; }
-.score-num { font-size: 30px; font-weight: 700; color: #409eff; }
+.score-num { font-size: 30px; font-weight: 700; color: #f59e0b; }
 .score-label { color: #999; margin-top: 4px; font-size: 13px; }
 .score-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
@@ -226,7 +240,7 @@ onMounted(load)
 .opt-row {
   padding: 8px 12px;
   border-radius: 6px;
-  background: #f5f7fa;
+  background: #fbf9f4;
   line-height: 1.6;
   word-break: break-word;
 }
@@ -238,7 +252,7 @@ onMounted(load)
   margin-top: 12px;
   padding: 10px 12px;
   background: #fafafa;
-  border-left: 3px solid #409eff;
+  border-left: 3px solid #f59e0b;
   white-space: pre-wrap;
   line-height: 1.7;
   color: #555;
@@ -248,11 +262,11 @@ onMounted(load)
 .ai-analysis {
   margin-top: 12px;
   padding: 12px 14px;
-  background: #f0f7ff;
-  border-left: 3px solid #409eff;
+  background: #fbf9f4;
+  border-left: 3px solid #f59e0b;
   border-radius: 0 6px 6px 0;
 }
-.ai-label { font-size: 12px; color: #409eff; font-weight: 600; margin-bottom: 6px; }
+.ai-label { font-size: 12px; color: #f59e0b; font-weight: 600; margin-bottom: 6px; }
 
 .weak-card { margin-top: 20px; }
 .weak-head { display: flex; align-items: center; justify-content: space-between; }
@@ -263,7 +277,7 @@ onMounted(load)
 .cursor {
   display: inline-block;
   animation: blink 0.8s step-end infinite;
-  color: #409eff;
+  color: #f59e0b;
   font-weight: 700;
   margin-left: 1px;
 }
@@ -277,8 +291,8 @@ onMounted(load)
 .md :deep(h1),.md :deep(h2),.md :deep(h3) { margin: 10px 0 6px; }
 .md :deep(ul),.md :deep(ol) { padding-left: 20px; margin: 6px 0; }
 .md :deep(li) { margin: 4px 0; line-height: 1.6; }
-.md :deep(pre) { background: #f5f7fa; padding: 10px; border-radius: 6px; overflow-x: auto; }
-.md :deep(code) { background: #f5f7fa; padding: 1px 4px; border-radius: 3px; font-size: 13px; }
+.md :deep(pre) { background: #fbf9f4; padding: 10px; border-radius: 6px; overflow-x: auto; }
+.md :deep(code) { background: #fbf9f4; padding: 1px 4px; border-radius: 3px; font-size: 13px; }
 .md :deep(table) {
   border-collapse: collapse;
   display: block;
@@ -291,7 +305,7 @@ onMounted(load)
   padding: 6px 10px;
   white-space: nowrap;
 }
-.md :deep(th) { background: #f5f7fa; }
+.md :deep(th) { background: #fbf9f4; }
 
 @media (max-width: 480px) {
   .score-num { font-size: 26px; }
