@@ -9,6 +9,11 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from backend.api.deps import get_db, require_admin
+from backend.config.categories import (
+    SECTION_LABELS,
+    category_name,
+    get_categories,
+)
 from backend.schemas.question import (
     OptionOut,
     QuestionGroupCreate,
@@ -20,6 +25,29 @@ from backend.schemas.question import (
 )
 
 router = APIRouter(prefix="/api/v1", tags=["questions"])
+
+
+@router.get("/categories")
+def list_categories(
+    level: str | None = Query(default=None, description="按级别过滤，如 N2"),
+    examable_only: bool = Query(default=False, description="仅返回支持出题的题型"),
+):
+    """返回 JLPT 题型列表（供前端级别→题型联动）。含板块标签。"""
+    cats = get_categories(level=level, examable_only=examable_only)
+    return {
+        "items": [
+            {
+                "code": c["code"],
+                "name": c["name"],
+                "name_ja": c["name_ja"],
+                "section": c["section"],
+                "section_label": SECTION_LABELS.get(c["section"], c["section"]),
+                "levels": c["levels"],
+                "examable": c["examable"],
+            }
+            for c in cats
+        ]
+    }
 
 
 def _parse_knowledge_points(raw) -> list:
@@ -51,11 +79,15 @@ def list_sources(conn=Depends(get_db)):
 @router.get("/questions", response_model=QuestionListResponse)
 def list_questions(
     type: str | None = Query(default=None, description="题型：single_choice/cloze/reading"),
+    category: str | None = Query(default=None, description="JLPT 题型 code，如 kanji_reading"),
     level: str | None = Query(default=None, description="级别：N1~N5"),
     difficulty_min: int | None = Query(default=None, ge=0, le=9),
     difficulty_max: int | None = Query(default=None, ge=0, le=9),
     knowledge_point: str | None = Query(default=None, description="知识点关键词"),
     source: str | None = Query(default=None, description="题库批次来源，如 result_67_validated"),
+    q: str | None = Query(default=None, description="题干全文搜索（文章 article 或子题 content）"),
+    order_by: str = Query(default="id", pattern="^(id|difficulty|level)$"),
+    order_dir: str = Query(default="asc", pattern="^(asc|desc)$"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     conn=Depends(get_db),
@@ -65,6 +97,9 @@ def list_questions(
     if type:
         where.append("type = %s")
         params.append(type)
+    if category:
+        where.append("category = %s")
+        params.append(category)
     if level:
         where.append("level = %s")
         params.append(level)
@@ -80,8 +115,17 @@ def list_questions(
     if source:
         where.append("source = %s")
         params.append(source)
+    if q:
+        # 命中文章本身，或题组下任一子题的题干
+        where.append(
+            "(article LIKE %s OR EXISTS "
+            "(SELECT 1 FROM questions qq WHERE qq.group_id = question_groups.id AND qq.content LIKE %s))"
+        )
+        like = f"%{q}%"
+        params.extend([like, like])
 
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    order_sql = f"ORDER BY {order_by} {order_dir.upper()}"
 
     with conn.cursor() as cursor:
         cursor.execute(f"SELECT COUNT(*) AS total FROM question_groups {where_sql}", params)
@@ -89,9 +133,9 @@ def list_questions(
 
         offset = (page - 1) * page_size
         cursor.execute(
-            f"""SELECT id, type, level, exam_date, difficulty, knowledge_points, source
+            f"""SELECT id, type, category, level, exam_date, difficulty, knowledge_points, source
                 FROM question_groups {where_sql}
-                ORDER BY id
+                {order_sql}
                 LIMIT %s OFFSET %s""",
             params + [page_size, offset],
         )
@@ -101,6 +145,8 @@ def list_questions(
         QuestionGroupSummary(
             id=r["id"],
             type=r["type"],
+            category=r["category"],
+            category_name=category_name(r["category"]),
             level=r["level"] or "",
             exam_date=r["exam_date"] or "",
             difficulty=r["difficulty"] or 0,
@@ -115,7 +161,7 @@ def list_questions(
 def _fetch_group(cursor, group_id: int) -> QuestionGroupOut | None:
     """从三表组装完整题组；不存在返回 None。GET/POST/PUT 共用。"""
     cursor.execute(
-        """SELECT id, type, article, level, exam_date, difficulty, knowledge_points
+        """SELECT id, type, category, article, level, exam_date, difficulty, knowledge_points
            FROM question_groups WHERE id = %s""",
         (group_id,),
     )
@@ -151,6 +197,7 @@ def _fetch_group(cursor, group_id: int) -> QuestionGroupOut | None:
     return QuestionGroupOut(
         id=group["id"],
         type=group["type"],
+        category=group["category"],
         article=group["article"],
         level=group["level"] or "",
         exam_date=group["exam_date"] or "",
@@ -180,10 +227,11 @@ def _insert_group_rows(cursor, payload: QuestionGroupCreate) -> int:
     """插入题组及其子题、选项，返回新 group_id。source/source_ref 留 NULL（手动创建）。"""
     cursor.execute(
         """INSERT INTO question_groups
-           (type, article, level, exam_date, difficulty, knowledge_points, source, source_ref)
-           VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL)""",
+           (type, category, article, level, exam_date, difficulty, knowledge_points, source, source_ref)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, NULL)""",
         (
             payload.type,
+            payload.category,
             payload.article,
             payload.level,
             payload.exam_date,
@@ -229,11 +277,12 @@ def replace_question_group(group_id: int, payload: QuestionGroupCreate, conn=Dep
             # 全量替换：更新题组行，删旧子题（外键级联清选项）后重建
             cursor.execute(
                 """UPDATE question_groups
-                   SET type=%s, article=%s, level=%s, exam_date=%s,
+                   SET type=%s, category=%s, article=%s, level=%s, exam_date=%s,
                        difficulty=%s, knowledge_points=%s
                    WHERE id=%s""",
                 (
                     payload.type,
+                    payload.category,
                     payload.article,
                     payload.level,
                     payload.exam_date,

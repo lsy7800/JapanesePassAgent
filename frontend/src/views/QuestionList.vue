@@ -2,26 +2,23 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { listQuestions, deleteQuestion, listSources } from '../api/questions'
+import { listQuestions, deleteQuestion, listSources, listCategories } from '../api/questions'
 
 const router = useRouter()
 
-const TYPE_OPTIONS = [
-  { value: 'single_choice', label: '单项选择' },
-  { value: 'cloze', label: '完形填空' },
-  { value: 'reading', label: '阅读理解' },
-]
 const LEVEL_OPTIONS = ['N1', 'N2', 'N3', 'N4', 'N5']
 
 const sources = ref([]) // [{ source, count }]
+const categories = ref([]) // 全部题型 [{ code, name, section_label, ... }]
 
 const filters = reactive({
   source: '',
-  type: '',
+  category: '',
   level: '',
   difficulty_min: null,
   difficulty_max: null,
   knowledge_point: '',
+  q: '',
 })
 
 const loading = ref(false)
@@ -30,7 +27,12 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 
-const typeLabel = (v) => TYPE_OPTIONS.find((t) => t.value === v)?.label || v
+// 题型下拉按板块分组
+const groupedCategories = () => {
+  const groups = {}
+  for (const c of categories.value) (groups[c.section_label] ||= []).push(c)
+  return Object.entries(groups).map(([label, items]) => ({ label, items }))
+}
 
 async function load() {
   loading.value = true
@@ -56,13 +58,24 @@ function onSearch() {
 
 function onReset() {
   filters.source = ''
-  filters.type = ''
+  filters.category = ''
   filters.level = ''
   filters.difficulty_min = null
   filters.difficulty_max = null
   filters.knowledge_point = ''
+  filters.q = ''
   page.value = 1
   load()
+}
+
+function goCreate() {
+  router.push({ name: 'create' })
+}
+
+// 点击知识点标签 → 回填筛选并查询
+function filterByKp(kp) {
+  filters.knowledge_point = kp
+  onSearch()
 }
 
 function onPageChange(p) {
@@ -103,7 +116,16 @@ async function loadSources() {
   }
 }
 
-// 切换批次时立即重新查询（下拉即筛选，无需再点查询）
+async function loadCategoryOptions() {
+  try {
+    const data = await listCategories()
+    categories.value = data.items || []
+  } catch {
+    // 题型加载失败不阻塞
+  }
+}
+
+// 切换批次/题型时立即重新查询（下拉即筛选，无需再点查询）
 function onSourceChange() {
   page.value = 1
   load()
@@ -111,14 +133,30 @@ function onSourceChange() {
 
 onMounted(() => {
   loadSources()
+  loadCategoryOptions()
   load()
 })
 </script>
 
 <template>
   <div>
+    <div class="page-head">
+      <el-button type="primary" @click="goCreate">
+        <el-icon style="margin-right: 4px"><Plus /></el-icon>新建题组
+      </el-button>
+    </div>
+
     <el-card shadow="never" class="filter-card">
-      <el-form :inline="true" :model="filters">
+      <el-form :inline="true" :model="filters" @submit.prevent>
+        <el-form-item label="搜索">
+          <el-input
+            v-model="filters.q"
+            placeholder="题干关键词"
+            clearable
+            style="width: 180px"
+            @keyup.enter="onSearch"
+          />
+        </el-form-item>
         <el-form-item label="批次">
           <el-select v-model="filters.source" placeholder="全部批次" clearable style="width: 220px" @change="onSourceChange">
             <el-option
@@ -130,8 +168,10 @@ onMounted(() => {
           </el-select>
         </el-form-item>
         <el-form-item label="题型">
-          <el-select v-model="filters.type" placeholder="全部" clearable style="width: 140px">
-            <el-option v-for="t in TYPE_OPTIONS" :key="t.value" :label="t.label" :value="t.value" />
+          <el-select v-model="filters.category" placeholder="全部" clearable filterable style="width: 180px" @change="onSourceChange">
+            <el-option-group v-for="g in groupedCategories()" :key="g.label" :label="g.label">
+              <el-option v-for="c in g.items" :key="c.code" :label="c.name" :value="c.code" />
+            </el-option-group>
           </el-select>
         </el-form-item>
         <el-form-item label="级别">
@@ -157,15 +197,24 @@ onMounted(() => {
     <el-table :data="rows" v-loading="loading" border stripe style="margin-top: 16px">
       <el-table-column prop="id" label="ID" width="80" />
       <el-table-column prop="source" label="批次" width="180" show-overflow-tooltip />
-      <el-table-column label="题型" width="110">
-        <template #default="{ row }">{{ typeLabel(row.type) }}</template>
+      <el-table-column label="题型" width="130">
+        <template #default="{ row }">
+          <el-tag v-if="row.category_name" size="small" type="primary" effect="plain">{{ row.category_name }}</el-tag>
+          <span v-else class="text-muted">—</span>
+        </template>
       </el-table-column>
       <el-table-column prop="level" label="级别" width="80" />
       <el-table-column prop="difficulty" label="难度" width="80" />
       <el-table-column prop="exam_date" label="考试日期" width="110" />
       <el-table-column label="知识点" min-width="200">
         <template #default="{ row }">
-          <el-tag v-for="kp in row.knowledge_points" :key="kp" size="small" style="margin: 2px">{{ kp }}</el-tag>
+          <el-tag
+            v-for="kp in row.knowledge_points"
+            :key="kp"
+            size="small"
+            style="margin: 2px; cursor: pointer"
+            @click="filterByKp(kp)"
+          >{{ kp }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="操作" width="170" fixed="right">
@@ -188,6 +237,12 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-bottom: 16px;
+}
 .filter-card {
   background: #fafafa;
 }

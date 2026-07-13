@@ -39,17 +39,18 @@ class ExamHistoryResponse(BaseModel):
 
 class ExamGenerateRequest(BaseModel):
     level: str | None = Field(default=None, description="目标级别 N1~N5，不传则不限")
-    types: list[str] = Field(default_factory=list, description="题型筛选，空表示全部")
+    categories: list[str] = Field(default_factory=list, description="JLPT 题型 code 筛选，空表示全部")
     total_questions: int = Field(default=20, ge=1, le=200, description="试卷题目数")
     difficulty_range: list[int] | None = Field(default=None, description="难度区间 [min, max]，各 0-9")
     time_limit_minutes: int = Field(default=0, ge=0, description="限时（分钟），0 不限")
 
-    @field_validator("types")
+    @field_validator("categories")
     @classmethod
-    def _check_types(cls, v):
-        bad = [t for t in v if t not in VALID_TYPES]
+    def _check_categories(cls, v):
+        from backend.config.categories import VALID_CODES
+        bad = [c for c in v if c not in VALID_CODES]
         if bad:
-            raise ValueError(f"非法题型 {bad}，合法值 {sorted(VALID_TYPES)}")
+            raise ValueError(f"非法题型 code {bad}")
         return v
 
     @field_validator("difficulty_range")
@@ -124,6 +125,7 @@ class ResultItemOut(BaseModel):
     seq: int
     group_id: int
     content: RichText | None = None
+    marked: str = ""
     options: list[ExamOptionOut] = Field(default_factory=list)
     user_answer: str | None = None
     correct_answer: str = ""

@@ -38,3 +38,10 @@ export function deleteQuestion(groupId) {
 export function listSources() {
   return http.get('/sources').then((r) => r.data)
 }
+
+/** JLPT 题型列表（可按级别过滤、只取可出题的） */
+export function listCategories(level, examableOnly = false) {
+  return http
+    .get('/categories', { params: { level: level || undefined, examable_only: examableOnly } })
+    .then((r) => r.data)
+}

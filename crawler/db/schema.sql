@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS users (
     email           VARCHAR(255) NOT NULL COMMENT '邮箱（登录账号）',
     hashed_password VARCHAR(255) NOT NULL COMMENT 'bcrypt 哈希密码',
     role            ENUM('student', 'admin') NOT NULL DEFAULT 'student',
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE COMMENT '是否启用；停用后禁止登录',
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uk_email (email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
@@ -15,6 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS question_groups (
     id               INT PRIMARY KEY AUTO_INCREMENT,
     type             ENUM('single_choice', 'cloze', 'reading') NOT NULL COMMENT '题型：单选/完形填空/阅读理解',
+    category         VARCHAR(30) DEFAULT NULL COMMENT 'JLPT 题型 code（见 backend/config/categories.py），如 kanji_reading/context',
     article          TEXT DEFAULT NULL COMMENT '文章内容（完形填空和阅读理解使用，单选题为NULL）',
     level            VARCHAR(10) DEFAULT '' COMMENT '考试级别：N1/N2/N3/N4/N5',
     exam_date        VARCHAR(20) DEFAULT '' COMMENT '考试日期，如 2023-07',

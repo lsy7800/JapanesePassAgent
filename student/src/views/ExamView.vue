@@ -1,23 +1,18 @@
 <script setup>
-import { ref, reactive, computed, onUnmounted } from 'vue'
+import { ref, reactive, computed, onUnmounted, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { generateExam, submitExam } from '../api/exam'
+import { generateExam, submitExam, getCategories } from '../api/exam'
 
 const router = useRouter()
 
 const LEVEL_OPTIONS = ['N1', 'N2', 'N3', 'N4', 'N5']
-const TYPE_OPTIONS = [
-  { value: 'single_choice', label: '单项选择' },
-  { value: 'cloze', label: '完形填空' },
-  { value: 'reading', label: '阅读理解' },
-]
 
 const phase = ref('config')
 
 const config = reactive({
   level: 'N1',
-  types: [],
+  categories: [],
   total_questions: 5,
   difficulty_range: null,
   time_limit_minutes: 0,
@@ -25,6 +20,37 @@ const config = reactive({
 const useDifficulty = ref(false)
 const diffMin = ref(1)
 const diffMax = ref(9)
+
+// 当前级别可选题型（按级别联动，只含可出题的）
+const categoryOptions = ref([])
+const catLoading = ref(false)
+
+async function loadCategories() {
+  catLoading.value = true
+  try {
+    const data = await getCategories(config.level, true)
+    categoryOptions.value = data.items || []
+    // 级别切换后，清掉已选中但当前级别不含的题型
+    const valid = new Set(categoryOptions.value.map((c) => c.code))
+    config.categories = config.categories.filter((c) => valid.has(c))
+  } catch (e) {
+    ElMessage.error('题型加载失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    catLoading.value = false
+  }
+}
+
+// 按板块分组，供下拉分组展示
+const groupedCategories = computed(() => {
+  const groups = {}
+  for (const c of categoryOptions.value) {
+    ;(groups[c.section_label] ||= []).push(c)
+  }
+  return Object.entries(groups).map(([label, items]) => ({ label, items }))
+})
+
+watch(() => config.level, loadCategories)
+onMounted(loadCategories)
 
 const loading = ref(false)
 const exam = ref(null)
@@ -35,6 +61,21 @@ let timer = null
 
 const answeredCount = computed(() => Object.keys(answers).length)
 
+// 渲染题干：把划线词 marked 标成金色下划线（先转义防 XSS）
+function renderContent(content, marked) {
+  if (content == null) return ''
+  let s = String(content)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  if (marked) {
+    const esc = String(marked).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    s = s.replace(new RegExp(esc, 'g'), (m) => `<u class="marked-word">${m}</u>`)
+  }
+  // 保留换行
+  return s.replace(/\n/g, '<br/>')
+}
+
 function fmtTime(sec) {
   const m = Math.floor(sec / 60)
   const s = sec % 60
@@ -44,7 +85,7 @@ function fmtTime(sec) {
 async function onGenerate() {
   const payload = {
     level: config.level || null,
-    types: config.types,
+    categories: config.categories,
     total_questions: config.total_questions,
     time_limit_minutes: config.time_limit_minutes,
   }
@@ -130,7 +171,7 @@ onUnmounted(stopTimer)
       <el-form label-position="top" class="config-form">
         <div class="form-row">
           <el-form-item label="级别" class="form-item-sm">
-            <el-select v-model="config.level" clearable style="width:100%">
+            <el-select v-model="config.level" style="width:100%">
               <el-option v-for="l in LEVEL_OPTIONS" :key="l" :label="l" :value="l" />
             </el-select>
           </el-form-item>
@@ -139,9 +180,20 @@ onUnmounted(stopTimer)
           </el-form-item>
         </div>
 
-        <el-form-item label="题型">
-          <el-select v-model="config.types" multiple placeholder="全部题型" style="width:100%">
-            <el-option v-for="t in TYPE_OPTIONS" :key="t.value" :label="t.label" :value="t.value" />
+        <el-form-item label="题型（不选＝该级别全部）">
+          <el-select
+            v-model="config.categories"
+            multiple
+            clearable
+            collapse-tags
+            collapse-tags-tooltip
+            placeholder="全部题型"
+            style="width:100%"
+            :loading="catLoading"
+          >
+            <el-option-group v-for="g in groupedCategories" :key="g.label" :label="g.label">
+              <el-option v-for="c in g.items" :key="c.code" :label="c.name" :value="c.code" />
+            </el-option-group>
           </el-select>
         </el-form-item>
 
@@ -185,7 +237,7 @@ onUnmounted(stopTimer)
           <span class="q-seq">第 {{ item.seq }} 题</span>
           <el-tag size="small" type="info">{{ item.level }}</el-tag>
         </div>
-        <div class="q-content">{{ item.content }}</div>
+        <div class="q-content" v-html="renderContent(item.content, item.marked)"></div>
         <el-radio-group v-model="answers[item.seq]" class="q-options">
           <el-radio
             v-for="opt in item.options"
@@ -237,9 +289,45 @@ onUnmounted(stopTimer)
 .q-card { margin-top: 14px; }
 .q-title { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .q-seq { font-weight: 600; }
-.q-content { font-size: 15px; line-height: 1.7; margin-bottom: 14px; }
-.q-options { display: flex; flex-direction: column; gap: 10px; }
-.q-option { height: auto; white-space: normal; line-height: 1.6; }
+.q-content { font-size: 15px; line-height: 1.9; margin-bottom: 16px; word-break: break-word; }
+
+/* 选项：左对齐的块状行，圆圈顶部对齐首行，整行可点 */
+.q-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+}
+.q-option {
+  width: 100%;
+  height: auto !important;
+  margin-right: 0 !important;
+  padding: 10px 12px !important;
+  border: 1px solid #e5e9f2;
+  border-radius: 8px;
+  background: #fafbfc;
+  line-height: 1.7;
+  white-space: normal;
+  align-items: flex-start; /* 圆圈顶部对齐首行，多行文本不再居中 */
+  transition: all 0.2s;
+}
+.q-option:hover {
+  border-color: #fbbf24;
+  background: #fffbeb;
+}
+.q-option.is-checked {
+  border-color: #f59e0b;
+  background: #fff7e6;
+}
+.q-option :deep(.el-radio__label) {
+  padding-left: 8px;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.7;
+}
+.q-option :deep(.el-radio__input) {
+  margin-top: 4px; /* 视觉对齐首行文字基线 */
+}
 
 @media (max-width: 480px) {
   .form-row { grid-template-columns: 1fr; }

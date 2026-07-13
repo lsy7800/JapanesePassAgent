@@ -32,6 +32,7 @@ class QuestionGroupOut(BaseModel):
     """完整题组，含所有子题和选项（GET /questions/{group_id}）。"""
     id: int
     type: str = Field(description="题型：single_choice/cloze/reading")
+    category: str | None = Field(default=None, description="JLPT 题型 code，如 kanji_reading")
     article: RichText | None = Field(default=None, description="文章内容，单选题为 null")
     level: str = Field(default="", description="级别：N1~N5")
     exam_date: str = Field(default="", description="考试日期，如 2023-07")
@@ -44,6 +45,8 @@ class QuestionGroupSummary(BaseModel):
     """题组摘要，用于列表接口（不含子题与选项）。"""
     id: int
     type: str
+    category: str | None = None
+    category_name: str = ""
     level: str = ""
     exam_date: str = ""
     difficulty: int = 0
@@ -108,6 +111,7 @@ class QuestionIn(BaseModel):
 class QuestionGroupCreate(BaseModel):
     """创建/全量替换题组的请求体（POST 与 PUT 复用）。"""
     type: str = Field(description="题型：single_choice/cloze/reading")
+    category: str | None = Field(default=None, description="JLPT 题型 code，如 kanji_reading")
     article: RichText | None = Field(default=None, description="文章内容，单选题为 null")
     level: str = Field(default="", description="级别：N1~N5")
     exam_date: str = Field(default="", description="考试日期，如 2023-07")
@@ -120,5 +124,15 @@ class QuestionGroupCreate(BaseModel):
     def _check_type(cls, v):
         if v not in VALID_TYPES:
             raise ValueError(f"题型必须是 {sorted(VALID_TYPES)}，收到 {v!r}")
+        return v
+
+    @field_validator("category")
+    @classmethod
+    def _check_category(cls, v):
+        if v is None or v == "":
+            return None
+        from backend.config.categories import VALID_CODES
+        if v not in VALID_CODES:
+            raise ValueError(f"未知题型 code：{v!r}")
         return v
 
