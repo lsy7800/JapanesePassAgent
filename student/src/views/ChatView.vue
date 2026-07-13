@@ -1,9 +1,9 @@
 <script setup>
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onMounted } from 'vue'
 import { marked } from 'marked'
-import { ElMessage } from 'element-plus'
-import { Download } from '@element-plus/icons-vue'
-import { chatStream } from '../api/agent'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Download, Plus, Delete, ChatLineRound } from '@element-plus/icons-vue'
+import { chatStream, listSessions, getSessionMessages, deleteSession } from '../api/agent'
 import { downloadExam } from '../api/exam'
 
 const EXAMPLES = [
@@ -18,12 +18,62 @@ const sending = ref(false)
 const sessionId = ref(null)
 const listRef = ref(null)
 const downloading = ref(false)
+const sessions = ref([])
+const loadingHistory = ref(false)
 
 let streamingIdx = -1
 let closeStream = null
 
 function renderMd(text) {
   return marked.parse(text || '')
+}
+
+async function refreshSessions() {
+  try {
+    sessions.value = await listSessions()
+  } catch {
+    // 列表加载失败不阻塞对话
+  }
+}
+
+async function openSession(sid) {
+  if (sid === sessionId.value || sending.value) return
+  closeStream?.()
+  closeStream = null
+  loadingHistory.value = true
+  try {
+    const rows = await getSessionMessages(sid)
+    messages.value = rows.map((r) => ({
+      role: r.role,
+      content: r.content,
+      tools: [],
+      exports: [],
+    }))
+    sessionId.value = sid
+    scrollBottom()
+  } catch (e) {
+    ElMessage.error('加载会话失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    loadingHistory.value = false
+  }
+}
+
+async function onDeleteSession(sid) {
+  try {
+    await ElMessageBox.confirm('确定删除这个会话？记录将无法恢复。', '删除会话', {
+      type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  try {
+    await deleteSession(sid)
+    sessions.value = sessions.value.filter((s) => s.id !== sid)
+    if (sid === sessionId.value) newSession()
+    ElMessage.success('已删除')
+  } catch (e) {
+    ElMessage.error('删除失败：' + (e.response?.data?.detail || e.message))
+  }
 }
 
 async function onDownload(exp) {
@@ -49,6 +99,7 @@ async function send(text) {
   if (!msg || sending.value) return
   input.value = ''
 
+  const isNew = sessionId.value == null
   messages.value.push({ role: 'user', content: msg })
   scrollBottom()
 
@@ -57,6 +108,11 @@ async function send(text) {
   sending.value = true
 
   closeStream = chatStream(msg, sessionId.value, {
+    onSession(sid) {
+      // 后端在流最开始返回 session_id，立即持久化并刷新列表
+      sessionId.value = sid
+      if (isNew) refreshSessions()
+    },
     onToken(content) {
       messages.value[streamingIdx].content += content
       scrollBottom()
@@ -78,6 +134,7 @@ async function send(text) {
       closeStream = null
       sending.value = false
       scrollBottom()
+      refreshSessions() // 刷新标题/排序
     },
     onError(detail) {
       messages.value[streamingIdx].streaming = false
@@ -109,75 +166,160 @@ function newSession() {
   sending.value = false
   streamingIdx = -1
 }
+
+onMounted(refreshSessions)
 </script>
 
 <template>
-  <div class="chat-wrap">
-    <div class="chat-head">
-      <b>AI 学习助手</b>
-      <el-button size="small" text @click="newSession">新会话</el-button>
-    </div>
+  <div class="chat-layout">
+    <!-- 历史会话侧栏 -->
+    <aside class="session-pane">
+      <el-button class="new-btn" type="primary" plain @click="newSession">
+        <el-icon style="margin-right: 4px"><Plus /></el-icon>新会话
+      </el-button>
+      <div class="session-list">
+        <div
+          v-for="s in sessions"
+          :key="s.id"
+          class="session-item"
+          :class="{ active: s.id === sessionId }"
+          @click="openSession(s.id)"
+        >
+          <el-icon class="s-icon"><ChatLineRound /></el-icon>
+          <span class="s-title">{{ s.title }}</span>
+          <el-icon class="s-del" @click.stop="onDeleteSession(s.id)"><Delete /></el-icon>
+        </div>
+        <div v-if="sessions.length === 0" class="session-empty">暂无历史会话</div>
+      </div>
+    </aside>
 
-    <div ref="listRef" class="chat-list">
-      <div v-if="messages.length === 0" class="empty">
-        <p>我是你的 JLPT 学习助手，可以帮你出题、组卷、讲解语法。试试：</p>
-        <div class="examples">
-          <el-button v-for="ex in EXAMPLES" :key="ex" size="small" round @click="send(ex)">{{ ex }}</el-button>
+    <!-- 对话主区 -->
+    <div class="chat-wrap" v-loading="loadingHistory">
+      <div class="chat-head">
+        <b>AI 学习助手</b>
+        <el-button size="small" text @click="newSession">新会话</el-button>
+      </div>
+
+      <div ref="listRef" class="chat-list">
+        <div v-if="messages.length === 0" class="empty">
+          <p>我是你的 JLPT 学习助手，可以帮你出题、组卷、讲解语法。试试：</p>
+          <div class="examples">
+            <el-button v-for="ex in EXAMPLES" :key="ex" size="small" round @click="send(ex)">{{ ex }}</el-button>
+          </div>
+        </div>
+
+        <div v-for="(m, i) in messages" :key="i" class="msg-row" :class="m.role">
+          <div class="bubble" :class="{ error: m.error }">
+            <div v-if="m.role === 'assistant'" class="md" v-html="renderMd(m.content)" />
+            <span v-else>{{ m.content }}</span>
+            <span v-if="m.streaming" class="cursor">▍</span>
+            <div v-if="m.tools && m.tools.length" class="tools">
+              <el-tag v-for="(t, ti) in m.tools" :key="ti" size="small" type="info" effect="plain">
+                🔧 {{ t }}
+              </el-tag>
+            </div>
+            <!-- 导出下载按钮：来自 export_exam 工具调用 -->
+            <div v-if="m.exports && m.exports.length" class="exports">
+              <el-button
+                v-for="(exp, ei) in m.exports"
+                :key="ei"
+                type="primary"
+                plain
+                size="small"
+                :loading="downloading"
+                @click="onDownload(exp)"
+              >
+                <el-icon style="margin-right: 4px"><Download /></el-icon>
+                下载试卷{{ exp.with_answers ? '（含答案）' : '' }}
+              </el-button>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div v-for="(m, i) in messages" :key="i" class="msg-row" :class="m.role">
-        <div class="bubble" :class="{ error: m.error }">
-          <div v-if="m.role === 'assistant'" class="md" v-html="renderMd(m.content)" />
-          <span v-else>{{ m.content }}</span>
-          <span v-if="m.streaming" class="cursor">▍</span>
-          <div v-if="m.tools && m.tools.length" class="tools">
-            <el-tag v-for="(t, ti) in m.tools" :key="ti" size="small" type="info" effect="plain">
-              🔧 {{ t }}
-            </el-tag>
-          </div>
-          <!-- 导出下载按钮：来自 export_exam 工具调用 -->
-          <div v-if="m.exports && m.exports.length" class="exports">
-            <el-button
-              v-for="(exp, ei) in m.exports"
-              :key="ei"
-              type="primary"
-              plain
-              size="small"
-              :loading="downloading"
-              @click="onDownload(exp)"
-            >
-              <el-icon style="margin-right: 4px"><Download /></el-icon>
-              下载试卷{{ exp.with_answers ? '（含答案）' : '' }}
-            </el-button>
-          </div>
-        </div>
+      <div class="chat-input">
+        <el-input
+          v-model="input"
+          type="textarea"
+          :rows="2"
+          resize="none"
+          placeholder="输入问题…"
+          :disabled="sending"
+          @keydown="onKeydown"
+        />
+        <el-button type="primary" :loading="sending" class="send-btn" @click="send()">发送</el-button>
       </div>
-    </div>
-
-    <div class="chat-input">
-      <el-input
-        v-model="input"
-        type="textarea"
-        :rows="2"
-        resize="none"
-        placeholder="输入问题…"
-        :disabled="sending"
-        @keydown="onKeydown"
-      />
-      <el-button type="primary" :loading="sending" class="send-btn" @click="send()">发送</el-button>
     </div>
   </div>
 </template>
 
 <style scoped>
+.chat-layout {
+  display: flex;
+  gap: 16px;
+  height: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* ── 历史会话侧栏 ── */
+.session-pane {
+  width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  padding: 12px;
+  overflow: hidden;
+}
+.new-btn { width: 100%; margin-bottom: 12px; flex-shrink: 0; }
+.session-list {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0 -6px;
+  padding: 0 6px;
+}
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: #606266;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+.session-item:hover { background: #f5f7fa; }
+.session-item.active { background: #fef3e2; color: #b45309; font-weight: 500; }
+.session-item .s-icon { flex-shrink: 0; font-size: 14px; }
+.session-item .s-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-item .s-del {
+  flex-shrink: 0;
+  opacity: 0;
+  color: #c0c4cc;
+  transition: opacity 0.15s, color 0.15s;
+}
+.session-item:hover .s-del { opacity: 1; }
+.session-item .s-del:hover { color: #f56c6c; }
+.session-empty { color: #c0c4cc; font-size: 13px; text-align: center; margin-top: 20px; }
+
 .chat-wrap {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   /* 填满 app-main 内容区，由内部 .chat-list 滚动，避免页面整体滚动 */
   height: 100%;
-  max-width: 1100px;
-  margin: 0 auto;
 }
 
 .chat-head {
@@ -290,7 +432,8 @@ function newSession() {
 .md :deep(th) { background: #fbf9f4; }
 
 @media (max-width: 640px) {
-  /* 移动端：减去顶部导航栏 50px 和 el-main padding 24px */
+  /* 移动端：隐藏会话侧栏，聚焦对话；历史通过「新会话」按钮管理 */
+  .session-pane { display: none; }
   .chat-wrap { height: 100%; }
   .bubble { max-width: 90%; }
   .send-btn { height: 52px; }
