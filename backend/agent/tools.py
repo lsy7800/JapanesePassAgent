@@ -16,6 +16,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
 from crawler.config import DB_CONFIG, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, require
+from backend.config.categories import category_name
 
 
 def _connect():
@@ -125,58 +126,84 @@ def fetch_questions(
 def generate_exam(
     level: str | None = None,
     category: str | None = None,
+    category_quotas: dict | None = None,
     total_questions: int = 10,
     difficulty_min: int | None = None,
     difficulty_max: int | None = None,
     user_id: int | None = None,
 ) -> dict:
-    """智能组卷：按条件随机抽题生成一套试卷并落库，返回试卷ID与题目列表（不含答案）。
+    """智能组卷：按条件随机抽题生成【一套】试卷并落库，返回试卷ID与题目列表（不含答案）。
 
     参数：
     - level: 级别 N1~N5
-    - category: JLPT 题型 code（如 kanji_reading 汉字读法、context 前后关系）
-    - total_questions: 题目数，默认 10，最多 50
+    - category: 单一题型 code（如 kanji_reading 汉字读法、context 前后关系）
+    - category_quotas: 多题型配额，形如 {"kanji_reading": 10, "context": 10}。
+      用于「各出 N 道」这类混合试卷——务必一次调用生成一张卷，不要分多次调用！
+      传了 category_quotas 时，忽略 category 与 total_questions。
+    - total_questions: 题目数，默认 10，最多 50（仅单题型/无题型时生效）
     - difficulty_min/difficulty_max: 难度区间 0-9
     - user_id: 当前用户ID（由 Agent 调用方注入，用于关联考试历史）
 
     返回 {exam_id, total, items}，items 每题含 seq、题干、选项（不含答案）。
-    用户做完后可通过 exam_id 提交判分。
+    用户做完后可通过 exam_id 提交判分；也可用 export_exam 导出为一份文件。
     """
-    total_questions = max(1, min(total_questions, 50))
-    where, params = [], []
+    base_where, base_params = [], []
     if level:
-        where.append("level = %s")
-        params.append(level)
-    if category:
-        where.append("category = %s")
-        params.append(category)
+        base_where.append("level = %s")
+        base_params.append(level)
     if difficulty_min is not None:
-        where.append("difficulty >= %s")
-        params.append(difficulty_min)
+        base_where.append("difficulty >= %s")
+        base_params.append(difficulty_min)
     if difficulty_max is not None:
-        where.append("difficulty <= %s")
-        params.append(difficulty_max)
-    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        base_where.append("difficulty <= %s")
+        base_params.append(difficulty_max)
+
+    # 组装抽题计划：[(category|None, count), ...]
+    plans: list[tuple[str | None, int]] = []
+    if category_quotas:
+        for cat, cnt in category_quotas.items():
+            n = max(0, min(int(cnt), 50))
+            if n:
+                plans.append((cat, n))
+    elif category:
+        plans.append((category, max(1, min(total_questions, 50))))
+    else:
+        plans.append((None, max(1, min(total_questions, 50))))
 
     conn = _connect()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT id FROM question_groups {where_sql} ORDER BY RAND() LIMIT %s",
-                params + [total_questions],
-            )
-            group_ids = [r["id"] for r in cur.fetchall()]
-            if not group_ids:
+            # 按题型分别抽题，保持配额内随机、题型间顺序排列
+            ordered_ids: list[int] = []
+            shortfalls: list[str] = []
+            for cat, cnt in plans:
+                where = list(base_where)
+                params = list(base_params)
+                if cat:
+                    where.append("category = %s")
+                    params.append(cat)
+                where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+                cur.execute(
+                    f"SELECT id FROM question_groups {where_sql} ORDER BY RAND() LIMIT %s",
+                    params + [cnt],
+                )
+                got = [r["id"] for r in cur.fetchall()]
+                ordered_ids.extend(got)
+                if len(got) < cnt:
+                    label = category_name(cat) if cat else "全部"
+                    shortfalls.append(f"{label}：需 {cnt} 题，实际 {len(got)} 题")
+
+            if not ordered_ids:
                 return {"exam_id": None, "total": 0, "items": [], "message": "没有符合条件的题目"}
 
             cur.execute(
                 "INSERT INTO exams (user_id, level, total, time_limit, status) VALUES (%s, %s, %s, 0, 'created')",
-                (user_id, level or "", len(group_ids)),
+                (user_id, level or "", len(ordered_ids)),
             )
             exam_id = cur.lastrowid
 
             items = []
-            for seq, gid in enumerate(group_ids, start=1):
+            for seq, gid in enumerate(ordered_ids, start=1):
                 cur.execute(
                     "INSERT INTO exam_items (exam_id, seq, group_id) VALUES (%s, %s, %s)",
                     (exam_id, seq, gid),
@@ -199,7 +226,10 @@ def generate_exam(
                     "options": options,
                 })
         conn.commit()
-        return {"exam_id": exam_id, "total": len(group_ids), "items": items}
+        result = {"exam_id": exam_id, "total": len(ordered_ids), "items": items}
+        if shortfalls:
+            result["message"] = "部分题型库存不足：" + "；".join(shortfalls)
+        return result
     except Exception:
         conn.rollback()
         raise
