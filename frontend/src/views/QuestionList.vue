@@ -65,6 +65,7 @@ function onReset() {
   filters.knowledge_point = ''
   filters.q = ''
   page.value = 1
+  loadCategoryOptions() // 级别清空后恢复全部题型
   load()
 }
 
@@ -118,7 +119,8 @@ async function loadSources() {
 
 async function loadCategoryOptions() {
   try {
-    const data = await listCategories()
+    // 按当前级别过滤题型：选了 N1 只列 N1 下的题型
+    const data = await listCategories(filters.level || undefined)
     categories.value = data.items || []
   } catch {
     // 题型加载失败不阻塞
@@ -127,6 +129,16 @@ async function loadCategoryOptions() {
 
 // 切换批次/题型时立即重新查询（下拉即筛选，无需再点查询）
 function onSourceChange() {
+  page.value = 1
+  load()
+}
+
+// 切换级别：收窄题型下拉，若已选题型在新级别下不存在则清空，然后重新查询
+async function onLevelChange() {
+  await loadCategoryOptions()
+  if (filters.category && !categories.value.some((c) => c.code === filters.category)) {
+    filters.category = ''
+  }
   page.value = 1
   load()
 }
@@ -175,7 +187,7 @@ onMounted(() => {
           </el-select>
         </el-form-item>
         <el-form-item label="级别">
-          <el-select v-model="filters.level" placeholder="全部" clearable style="width: 100px">
+          <el-select v-model="filters.level" placeholder="全部" clearable style="width: 100px" @change="onLevelChange">
             <el-option v-for="l in LEVEL_OPTIONS" :key="l" :label="l" :value="l" />
           </el-select>
         </el-form-item>

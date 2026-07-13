@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { EditPen, ChatDotRound, SwitchButton, List, TrendCharts, Expand, Link } from '@element-plus/icons-vue'
+import { EditPen, ChatDotRound, SwitchButton, List, TrendCharts, Expand, Link, Fold } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth'
 
 const route = useRoute()
@@ -10,6 +10,12 @@ const auth = useAuthStore()
 
 const activeMenu = computed(() => route.path)
 const drawerOpen = ref(false)
+const collapsed = ref(localStorage.getItem('sidebar_collapsed') === '1')
+
+function toggleCollapse() {
+  collapsed.value = !collapsed.value
+  localStorage.setItem('sidebar_collapsed', collapsed.value ? '1' : '0')
+}
 
 const NAV_ITEMS = [
   { index: '/exam',    icon: EditPen,      label: '在线考试' },
@@ -45,25 +51,25 @@ function navigate(path) {
 
   <el-container v-else class="app-container">
     <!-- ── 桌面侧边栏 ── -->
-    <el-aside class="app-aside desktop-aside" width="200px">
+    <el-aside class="app-aside desktop-aside" :class="{ collapsed }" :width="collapsed ? '64px' : '200px'">
       <div class="brand">
         <span class="brand-mark">あ</span>
-        <span>JLPT 学习系统</span>
+        <span v-show="!collapsed">JLPT 学习系统</span>
       </div>
-      <el-menu :default-active="activeMenu" router class="aside-menu">
+      <el-menu :default-active="activeMenu" router class="aside-menu" :collapse="collapsed" :collapse-transition="false">
         <el-menu-item v-for="item in NAV_ITEMS" :key="item.index" :index="item.index">
           <el-icon><component :is="item.icon" /></el-icon>
-          <span>{{ item.label }}</span>
+          <template #title>{{ item.label }}</template>
         </el-menu-item>
       </el-menu>
       <div class="aside-footer">
-        <a href="https://github.com/lsy7800/JapanesePassAgent" target="_blank" rel="noopener" class="contact-link">
+        <a href="https://github.com/lsy7800/JapanesePassAgent" target="_blank" rel="noopener" class="contact-link" :title="collapsed ? 'GitHub 仓库' : ''">
           <el-icon><Link /></el-icon>
-          <span>GitHub 仓库</span>
+          <span v-show="!collapsed">GitHub 仓库</span>
         </a>
-        <el-button class="logout-btn" text @click="logout">
+        <el-button class="logout-btn" text @click="logout" :title="collapsed ? '退出登录' : ''">
           <el-icon><SwitchButton /></el-icon>
-          <span>退出登录</span>
+          <span v-show="!collapsed">退出登录</span>
         </el-button>
       </div>
     </el-aside>
@@ -72,7 +78,12 @@ function navigate(path) {
     <el-container class="main-container">
       <!-- 桌面顶栏 -->
       <div class="topbar desktop-topbar">
-        <div class="topbar-title">{{ pageTitle }}</div>
+        <div class="topbar-left">
+          <el-button text class="collapse-btn" @click="toggleCollapse" :title="collapsed ? '展开侧栏' : '收起侧栏'">
+            <el-icon size="18"><Fold v-if="!collapsed" /><Expand v-else /></el-icon>
+          </el-button>
+          <div class="topbar-title">{{ pageTitle }}</div>
+        </div>
         <div class="topbar-right">
           <span class="topbar-user" :title="auth.email">{{ auth.email }}</span>
           <el-button text class="topbar-logout" @click="logout">
@@ -149,6 +160,8 @@ body { margin: 0; }
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  transition: width 0.25s ease;
+  overflow: hidden;
 }
 .brand {
   height: 56px;
@@ -162,7 +175,9 @@ body { margin: 0; }
   background: #050709;
   flex-shrink: 0;
   letter-spacing: 0.5px;
+  white-space: nowrap;
 }
+.app-aside.collapsed .brand { padding: 0; justify-content: center; }
 .brand .brand-mark {
   width: 28px;
   height: 28px;
@@ -198,6 +213,25 @@ body { margin: 0; }
   background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
   box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
 }
+/* 折叠态：菜单项图标居中，去掉左内边距 */
+.app-aside.collapsed .aside-menu { padding: 10px 0; }
+.app-aside.collapsed .aside-menu .el-menu-item {
+  padding: 0 !important;
+  justify-content: center;
+  margin: 4px 10px;
+  width: calc(100% - 20px);
+  min-width: 0;
+}
+.app-aside.collapsed .aside-menu .el-menu-item .el-icon {
+  margin: 0 !important;
+  width: auto;
+}
+.app-aside.collapsed .aside-menu .el-menu-item .el-tooltip__trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 
 /* ── 侧栏底部：联系方式 + 退出 ── */
 .aside-footer {
@@ -208,6 +242,9 @@ body { margin: 0; }
   flex-direction: column;
   gap: 8px;
 }
+.app-aside.collapsed .aside-footer { padding: 12px 8px; }
+.app-aside.collapsed .contact-link,
+.app-aside.collapsed .logout-btn { justify-content: center; padding: 6px 0 !important; }
 .contact-link {
   display: flex;
   align-items: center;
@@ -249,6 +286,9 @@ body { margin: 0; }
   padding: 0 32px;
 }
 .topbar-title { font-size: 17px; font-weight: 600; color: #1f2937; }
+.topbar-left { display: flex; align-items: center; gap: 12px; }
+.collapse-btn { color: #64748b; padding: 6px; }
+.collapse-btn:hover { color: #f59e0b; }
 .topbar-right { display: flex; align-items: center; gap: 14px; }
 .topbar-user {
   font-size: 13px;

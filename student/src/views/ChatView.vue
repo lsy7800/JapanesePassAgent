@@ -176,7 +176,7 @@ function newSession() {
   flex-direction: column;
   /* 填满 app-main 内容区，由内部 .chat-list 滚动，避免页面整体滚动 */
   height: 100%;
-  max-width: 860px;
+  max-width: 1100px;
   margin: 0 auto;
 }
 
