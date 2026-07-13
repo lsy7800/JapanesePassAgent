@@ -2,13 +2,18 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
 import LoginView from '../views/LoginView.vue'
+import DashboardView from '../views/DashboardView.vue'
 import QuestionList from '../views/QuestionList.vue'
 import QuestionDetail from '../views/QuestionDetail.vue'
+import UsersView from '../views/UsersView.vue'
 
 const routes = [
   { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
-  { path: '/', name: 'list', component: QuestionList },
+  { path: '/', name: 'dashboard', component: DashboardView },
+  { path: '/questions', name: 'list', component: QuestionList },
+  { path: '/questions/new', name: 'create', component: QuestionDetail },
   { path: '/questions/:id', name: 'detail', component: QuestionDetail, props: true },
+  { path: '/users', name: 'users', component: UsersView },
 ]
 
 const router = createRouter({

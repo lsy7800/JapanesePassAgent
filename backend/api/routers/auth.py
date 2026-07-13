@@ -35,12 +35,14 @@ def register(payload: RegisterRequest, conn=Depends(get_db)):
 def login(payload: LoginRequest, conn=Depends(get_db)):
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, email, hashed_password, role FROM users WHERE email = %s",
+            "SELECT id, email, hashed_password, role, is_active FROM users WHERE email = %s",
             (payload.email,),
         )
         user = cur.fetchone()
     if not user or not verify_password(payload.password, user["hashed_password"]):
         raise HTTPException(status_code=401, detail="邮箱或密码错误")
+    if not user["is_active"]:
+        raise HTTPException(status_code=403, detail="账号已停用，请联系管理员")
     token = create_access_token(user["id"], user["email"], user["role"])
     return TokenResponse(access_token=token, role=user["role"], email=user["email"])
 

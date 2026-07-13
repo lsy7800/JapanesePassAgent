@@ -33,10 +33,12 @@ def get_current_user(
 
     user_id = int(payload["sub"])
     with conn.cursor() as cur:
-        cur.execute("SELECT id, email, role FROM users WHERE id = %s", (user_id,))
+        cur.execute("SELECT id, email, role, is_active FROM users WHERE id = %s", (user_id,))
         user = cur.fetchone()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")
+    if not user["is_active"]:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="账号已停用")
     return user
 
 
