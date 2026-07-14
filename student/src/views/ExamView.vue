@@ -1,7 +1,8 @@
 <script setup>
-import { ref, reactive, computed, onUnmounted, watch, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, reactive, computed, onUnmounted, watch, onMounted, nextTick } from 'vue'
+import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Flag } from '@element-plus/icons-vue'
 import { generateExam, submitExam, getCategories } from '../api/exam'
 
 const router = useRouter()
@@ -59,7 +60,88 @@ const answers = reactive({})
 const remaining = ref(0)
 let timer = null
 
+// ── 答题卡 / 标记 / 防误退 状态 ──
+const flags = reactive({})        // seq -> true，标记待复查
+const currentSeq = ref(1)         // 视口中最靠上的题号（答题卡高亮当前）
+const showSheet = ref(true)       // 答题卡展开/收起
+const submitted = ref(false)      // 已交卷（放行路由守卫，避免自跳被拦）
+let warned5 = false               // 5 分钟提醒只触发一次
+let warned1 = false               // 1 分钟提醒只触发一次
+let io = null                     // IntersectionObserver：追踪当前题
+
 const answeredCount = computed(() => Object.keys(answers).length)
+const flagCount = computed(() => Object.keys(flags).length)
+const lowTime = computed(() => exam.value?.time_limit > 0 && remaining.value <= 60 && remaining.value > 0)
+
+function toggleFlag(seq) {
+  if (flags[seq]) delete flags[seq]
+  else flags[seq] = true
+}
+
+function chipClass(seq) {
+  return {
+    answered: answers[seq] != null,
+    flagged: flags[seq] === true,
+    current: currentSeq.value === seq,
+  }
+}
+
+function jumpTo(seq) {
+  const el = document.getElementById(`q-${seq}`)
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+// 用 IntersectionObserver 追踪当前可见题号（取可见集合中最小 seq）
+function setupObserver() {
+  teardownObserver()
+  const visible = new Set()
+  io = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        const seq = Number(e.target.dataset.seq)
+        if (e.isIntersecting) visible.add(seq)
+        else visible.delete(seq)
+      }
+      if (visible.size) currentSeq.value = Math.min(...visible)
+    },
+    { rootMargin: '-120px 0px -60% 0px', threshold: 0 },
+  )
+  document.querySelectorAll('.q-card').forEach((el) => io.observe(el))
+}
+
+function teardownObserver() {
+  if (io) { io.disconnect(); io = null }
+}
+
+// ── 防误退：刷新/关页原生拦截 ──
+function beforeUnloadHandler(e) {
+  e.preventDefault()
+  e.returnValue = ''
+}
+
+function armGuards() {
+  window.addEventListener('beforeunload', beforeUnloadHandler)
+}
+
+function disarmGuards() {
+  window.removeEventListener('beforeunload', beforeUnloadHandler)
+}
+
+// 路由离开确认（考试进行中且未交卷时）
+onBeforeRouteLeave(async () => {
+  if (phase.value !== 'answering' || submitted.value) return true
+  try {
+    await ElMessageBox.confirm('考试进行中，离开将丢失当前作答，确定离开？', '离开考试', {
+      type: 'warning',
+      confirmButtonText: '离开',
+      cancelButtonText: '继续答题',
+    })
+    disarmGuards()
+    return true
+  } catch {
+    return false
+  }
+})
 
 // 渲染题干：把划线词 marked 标成金色下划线（先转义防 XSS）
 function renderContent(content, marked) {
@@ -100,7 +182,14 @@ async function onGenerate() {
     }
     exam.value = data
     Object.keys(answers).forEach((k) => delete answers[k])
+    Object.keys(flags).forEach((k) => delete flags[k])
+    currentSeq.value = 1
+    warned5 = warned1 = false
+    submitted.value = false
     phase.value = 'answering'
+    armGuards()
+    await nextTick()
+    setupObserver()
     if (data.time_limit > 0) startTimer(data.time_limit * 60)
   } catch (e) {
     ElMessage.error('组卷失败：' + (e.response?.data?.detail || e.message))
@@ -113,6 +202,15 @@ function startTimer(sec) {
   remaining.value = sec
   timer = setInterval(() => {
     remaining.value -= 1
+    // 计时预警：5 分钟 / 1 分钟各提醒一次
+    if (!warned5 && remaining.value === 300) {
+      warned5 = true
+      ElMessage.warning('还剩 5 分钟')
+    }
+    if (!warned1 && remaining.value === 60) {
+      warned1 = true
+      ElMessage.warning({ message: '还剩 1 分钟，请尽快检查', duration: 4000 })
+    }
     if (remaining.value <= 0) {
       clearInterval(timer)
       timer = null
@@ -146,6 +244,10 @@ async function doSubmit() {
   loading.value = true
   try {
     const data = await submitExam(exam.value.id, payload.length ? payload : [{ seq: 1, answer: 'a' }])
+    // 交卷成功：放行守卫后再跳转结果页
+    submitted.value = true
+    disarmGuards()
+    teardownObserver()
     router.push(`/result/${data.id}`)
   } catch (e) {
     ElMessage.error('交卷失败：' + (e.response?.data?.detail || e.message))
@@ -155,12 +257,20 @@ async function doSubmit() {
 
 function restart() {
   stopTimer()
+  disarmGuards()
+  teardownObserver()
+  submitted.value = true // 主动返回配置页，不再触发离开确认
   exam.value = null
   Object.keys(answers).forEach((k) => delete answers[k])
+  Object.keys(flags).forEach((k) => delete flags[k])
   phase.value = 'config'
 }
 
-onUnmounted(stopTimer)
+onUnmounted(() => {
+  stopTimer()
+  disarmGuards()
+  teardownObserver()
+})
 </script>
 
 <template>
@@ -223,19 +333,61 @@ onUnmounted(stopTimer)
     <!-- 答题阶段 -->
     <div v-else-if="phase === 'answering'">
       <el-affix :offset="0">
-        <div class="answer-bar">
-          <span class="bar-info">
-            共 {{ exam.total }} 题 · 已答 <b>{{ answeredCount }}</b>/{{ exam.total }}
-          </span>
-          <span v-if="exam.time_limit > 0" class="timer">⏱ {{ fmtTime(remaining) }}</span>
-          <el-button type="primary" size="small" :loading="loading" @click="onSubmit">交卷</el-button>
+        <div class="answer-bar" :class="{ 'low-time': lowTime }">
+          <div class="bar-top">
+            <span class="bar-info">
+              共 {{ exam.total }} 题 · 已答 <b>{{ answeredCount }}</b>/{{ exam.total }}
+              <span v-if="flagCount" class="flag-info">· 标记 {{ flagCount }}</span>
+            </span>
+            <span v-if="exam.time_limit > 0" class="timer" :class="{ low: lowTime }">
+              ⏱ {{ fmtTime(remaining) }}
+            </span>
+            <el-button text size="small" class="sheet-toggle" @click="showSheet = !showSheet">
+              {{ showSheet ? '收起' : '答题卡' }}
+            </el-button>
+            <el-button type="primary" size="small" :loading="loading" @click="onSubmit">交卷</el-button>
+          </div>
+          <!-- 答题卡：题号网格 -->
+          <div v-show="showSheet" class="answer-sheet">
+            <button
+              v-for="item in exam.items"
+              :key="item.seq"
+              type="button"
+              class="chip"
+              :class="chipClass(item.seq)"
+              @click="jumpTo(item.seq)"
+            >{{ item.seq }}</button>
+          </div>
+          <div v-show="showSheet" class="sheet-legend">
+            <span><i class="dot answered"></i>已答</span>
+            <span><i class="dot"></i>未答</span>
+            <span><i class="dot flagged"></i>标记</span>
+          </div>
         </div>
       </el-affix>
 
-      <el-card v-for="item in exam.items" :key="item.seq" shadow="never" class="q-card">
+      <el-card
+        v-for="item in exam.items"
+        :key="item.seq"
+        :id="`q-${item.seq}`"
+        :data-seq="item.seq"
+        shadow="never"
+        class="q-card"
+      >
         <div class="q-title">
           <span class="q-seq">第 {{ item.seq }} 题</span>
           <el-tag size="small" type="info">{{ item.level }}</el-tag>
+          <span class="q-spacer"></span>
+          <el-button
+            text
+            size="small"
+            class="flag-btn"
+            :class="{ active: flags[item.seq] }"
+            @click="toggleFlag(item.seq)"
+          >
+            <el-icon><Flag /></el-icon>
+            {{ flags[item.seq] ? '已标记' : '标记' }}
+          </el-button>
         </div>
         <div class="q-content" v-html="renderContent(item.content, item.marked)"></div>
         <el-radio-group v-model="answers[item.seq]" class="q-options">
@@ -275,20 +427,91 @@ onUnmounted(stopTimer)
 
 /* 答题栏 */
 .answer-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
   background: #fff;
   padding: 10px 14px;
   border-bottom: 1px solid #ebeef5;
   box-shadow: 0 2px 8px rgba(0,0,0,.05);
 }
+.answer-bar.low-time { box-shadow: 0 2px 10px rgba(245,108,108,.35); }
+.bar-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 .bar-info { flex: 1; font-size: 13px; }
+.flag-info { color: #e6a23c; }
 .timer { color: #e6a23c; font-weight: 600; font-size: 13px; }
+.timer.low {
+  color: #f56c6c;
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+.sheet-toggle { padding: 0 4px; }
 
-.q-card { margin-top: 14px; }
+/* 答题卡：题号网格 */
+.answer-sheet {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  max-height: 132px;
+  overflow-y: auto;
+}
+.chip {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #dcdfe6;
+  border-radius: 7px;
+  background: #fff;
+  color: #606266;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+  padding: 0;
+}
+.chip:hover { border-color: #fbbf24; }
+.chip.answered {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #fff;
+  font-weight: 600;
+}
+.chip.flagged {
+  border-color: #e6a23c;
+  border-width: 2px;
+  box-shadow: inset 0 0 0 1px #fff;
+}
+.chip.current {
+  outline: 2px solid #422006;
+  outline-offset: 1px;
+}
+.sheet-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #909399;
+}
+.sheet-legend span { display: flex; align-items: center; gap: 4px; }
+.sheet-legend .dot {
+  width: 12px; height: 12px; border-radius: 3px;
+  border: 1px solid #dcdfe6; background: #fff; display: inline-block;
+}
+.sheet-legend .dot.answered { background: #f59e0b; border-color: #f59e0b; }
+.sheet-legend .dot.flagged { border-color: #e6a23c; border-width: 2px; }
+
+.q-card {
+  margin-top: 14px;
+  scroll-margin-top: 160px; /* 跳转时避开粘性答题栏 */
+}
 .q-title { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .q-seq { font-weight: 600; }
+.q-spacer { flex: 1; }
+.flag-btn { color: #909399; }
+.flag-btn.active { color: #e6a23c; font-weight: 600; }
 .q-content { font-size: 15px; line-height: 1.9; margin-bottom: 16px; word-break: break-word; }
 
 /* 选项：左对齐的块状行，圆圈顶部对齐首行，整行可点 */
@@ -333,5 +556,10 @@ onUnmounted(stopTimer)
   .form-row { grid-template-columns: 1fr; }
   .diff-num { width: 80px; }
   .q-content { font-size: 14px; }
+  .bar-top { flex-wrap: wrap; gap: 8px 10px; }
+  .bar-info { flex-basis: 100%; }
+  .answer-sheet { max-height: 108px; }
+  .chip { width: 30px; height: 30px; font-size: 12px; }
+  .q-card { scroll-margin-top: 200px; }
 }
 </style>
