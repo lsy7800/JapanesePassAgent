@@ -11,6 +11,11 @@ export function generateExam(payload) {
   return http.post('/exams/generate', payload).then((r) => r.data)
 }
 
+// AI 智能组卷：按自然语言需求 + 用户薄弱点，由后端 LLM 规划并落库
+export function smartGenerateExam(payload) {
+  return http.post('/exams/smart-generate', payload).then((r) => r.data)
+}
+
 export function getExam(id) {
   return http.get(`/exams/${id}`).then((r) => r.data)
 }

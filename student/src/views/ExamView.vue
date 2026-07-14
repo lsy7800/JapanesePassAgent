@@ -3,13 +3,32 @@ import { ref, reactive, computed, onUnmounted, watch, onMounted, nextTick } from
 import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Flag } from '@element-plus/icons-vue'
-import { generateExam, submitExam, getCategories } from '../api/exam'
+import { generateExam, submitExam, getCategories, smartGenerateExam } from '../api/exam'
 
 const router = useRouter()
 
 const LEVEL_OPTIONS = ['N1', 'N2', 'N3', 'N4', 'N5']
 
 const phase = ref('config')
+
+// 组卷模式：manual 手动 / ai 智能
+const mode = ref('manual')
+
+// AI 智能组卷
+const AI_EXAMPLES = [
+  '针对我的薄弱点出10道题，帮我查漏补缺',
+  '汉字读音和词汇辨析各出5道',
+  '来一套 N1 综合模拟，10 道题',
+  '多出几道我最近容易错的题型',
+]
+const ai = reactive({
+  level: 'N1',
+  requirement: '',
+  time_limit_minutes: 0,
+})
+const rationale = ref('')
+const shortfalls = ref([])
+const showRationale = ref(true)
 
 const config = reactive({
   level: 'N1',
@@ -198,22 +217,57 @@ async function onGenerate() {
       ElMessage.warning('没有符合条件的题目，请调整组卷条件')
       return
     }
-    exam.value = data
-    Object.keys(answers).forEach((k) => delete answers[k])
-    Object.keys(flags).forEach((k) => delete flags[k])
-    currentSeq.value = 1
-    warned5 = warned1 = false
-    submitted.value = false
-    phase.value = 'answering'
-    armGuards()
-    await nextTick()
-    setupScrollSpy()
-    if (data.time_limit > 0) startTimer(data.time_limit * 60)
+    rationale.value = ''
+    shortfalls.value = []
+    await enterAnswering(data)
   } catch (e) {
     ElMessage.error('组卷失败：' + (e.response?.data?.detail || e.message))
   } finally {
     loading.value = false
   }
+}
+
+async function onSmartGenerate() {
+  const req = ai.requirement.trim()
+  if (!req) {
+    ElMessage.warning('请先描述你的组卷需求')
+    return
+  }
+  loading.value = true
+  try {
+    const data = await smartGenerateExam({
+      requirement: req,
+      level: ai.level || null,
+      time_limit_minutes: ai.time_limit_minutes,
+    })
+    if (!data.total) {
+      ElMessage.warning('没有符合条件的题目，请调整需求')
+      return
+    }
+    rationale.value = data.rationale || ''
+    shortfalls.value = data.shortfalls || []
+    showRationale.value = true
+    await enterAnswering(data)
+  } catch (e) {
+    ElMessage.error('智能组卷失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    loading.value = false
+  }
+}
+
+// 进入作答阶段：手动/智能组卷共用（倒计时、答题卡、防误退整套）
+async function enterAnswering(data) {
+  exam.value = data
+  Object.keys(answers).forEach((k) => delete answers[k])
+  Object.keys(flags).forEach((k) => delete flags[k])
+  currentSeq.value = 1
+  warned5 = warned1 = false
+  submitted.value = false
+  phase.value = 'answering'
+  armGuards()
+  await nextTick()
+  setupScrollSpy()
+  if (data.time_limit > 0) startTimer(data.time_limit * 60)
 }
 
 function startTimer(sec) {
@@ -295,8 +349,18 @@ onUnmounted(() => {
   <div class="exam-wrap">
     <!-- 组卷配置 -->
     <el-card v-if="phase === 'config'" shadow="never">
-      <template #header><b>组卷配置</b></template>
-      <el-form label-position="top" class="config-form">
+      <template #header>
+        <div class="config-head">
+          <b>组卷配置</b>
+          <el-radio-group v-model="mode" size="small">
+            <el-radio-button value="manual">手动组卷</el-radio-button>
+            <el-radio-button value="ai">AI 智能组卷</el-radio-button>
+          </el-radio-group>
+        </div>
+      </template>
+
+      <!-- 手动组卷 -->
+      <el-form v-show="mode === 'manual'" label-position="top" class="config-form">
         <div class="form-row">
           <el-form-item label="级别" class="form-item-sm">
             <el-select v-model="config.level" style="width:100%">
@@ -346,6 +410,53 @@ onUnmounted(() => {
           </el-button>
         </el-form-item>
       </el-form>
+
+      <!-- AI 智能组卷 -->
+      <el-form v-show="mode === 'ai'" label-position="top" class="config-form">
+        <div class="ai-hint">
+          用自然语言描述你想练什么，AI 会结合你的历史薄弱点智能组卷。
+        </div>
+        <div class="form-row">
+          <el-form-item label="级别" class="form-item-sm">
+            <el-select v-model="ai.level" style="width:100%">
+              <el-option v-for="l in LEVEL_OPTIONS" :key="l" :label="l" :value="l" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="限时（分钟，0 不限）" class="form-item-sm">
+            <el-input-number v-model="ai.time_limit_minutes" :min="0" :max="180" style="width:100%" />
+          </el-form-item>
+        </div>
+
+        <el-form-item label="组卷需求">
+          <el-input
+            v-model="ai.requirement"
+            type="textarea"
+            :rows="3"
+            maxlength="500"
+            show-word-limit
+            placeholder="例如：针对我的薄弱点出10道题，帮我查漏补缺"
+          />
+        </el-form-item>
+
+        <el-form-item label="快捷示例">
+          <div class="ai-examples">
+            <el-tag
+              v-for="ex in AI_EXAMPLES"
+              :key="ex"
+              class="ai-example"
+              effect="plain"
+              round
+              @click="ai.requirement = ex"
+            >{{ ex }}</el-tag>
+          </div>
+        </el-form-item>
+
+        <el-form-item>
+          <el-button type="primary" :loading="loading" style="width:100%" @click="onSmartGenerate">
+            AI 生成并开始
+          </el-button>
+        </el-form-item>
+      </el-form>
     </el-card>
 
     <!-- 答题阶段 -->
@@ -383,6 +494,24 @@ onUnmounted(() => {
           </div>
         </div>
       </el-affix>
+
+      <!-- AI 组卷说明 -->
+      <el-alert
+        v-if="rationale && showRationale"
+        class="rationale-alert"
+        type="warning"
+        :closable="true"
+        show-icon
+        @close="showRationale = false"
+      >
+        <template #title>
+          <span class="rationale-title">🤖 AI 组卷说明</span>
+        </template>
+        <div class="rationale-body">{{ rationale }}</div>
+        <div v-if="shortfalls.length" class="rationale-short">
+          注：{{ shortfalls.join('；') }}
+        </div>
+      </el-alert>
 
       <el-card
         v-for="item in exam.items"
@@ -428,7 +557,36 @@ onUnmounted(() => {
 }
 
 /* 配置表单 */
+.config-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
 .config-form { max-width: 560px; }
+.ai-hint {
+  font-size: 13px;
+  color: #909399;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 14px;
+}
+.ai-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ai-example { cursor: pointer; transition: all 0.15s; }
+.ai-example:hover { border-color: #f59e0b; color: #b45309; }
+
+/* AI 组卷说明条 */
+.rationale-alert { margin-bottom: 14px; }
+.rationale-title { font-weight: 600; }
+.rationale-body { font-size: 13px; line-height: 1.6; }
+.rationale-short { font-size: 12px; color: #b45309; margin-top: 4px; }
 .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;

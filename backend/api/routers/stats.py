@@ -9,6 +9,7 @@ import json
 from fastapi import APIRouter, Depends, Query
 
 from backend.api.deps import get_db, get_current_user
+from backend.services.stats_service import compute_weak_points
 from backend.schemas.stats import (
     WrongQuestionsRequest,
     WrongQuestionsResponse,
@@ -40,50 +41,19 @@ def weak_points(
     current_user=Depends(get_current_user),
 ):
     """跨多次考试聚合错题 knowledge_points，返回薄弱点排名。"""
-    uid = current_user["id"]
     with conn.cursor() as cur:
-        # 查该用户所有答错的题组
-        cur.execute(
-            """SELECT qg.knowledge_points
-               FROM exam_items ei
-               JOIN exams e ON ei.exam_id = e.id
-               JOIN question_groups qg ON ei.group_id = qg.id
-               WHERE e.user_id = %s AND ei.is_correct = 0 AND e.status = 'submitted'""",
-            (uid,),
+        ranked = compute_weak_points(cur, current_user["id"])
+
+    items = [
+        WeakPoint(
+            point=r["point"],
+            wrong_count=r["wrong_count"],
+            total_count=r["total_count"],
+            error_rate=r["error_rate"],
         )
-        rows = cur.fetchall()
-
-        # 统计总答题数（含正确），用于计算错误率
-        cur.execute(
-            """SELECT qg.knowledge_points, ei.is_correct
-               FROM exam_items ei
-               JOIN exams e ON ei.exam_id = e.id
-               JOIN question_groups qg ON ei.group_id = qg.id
-               WHERE e.user_id = %s AND e.status = 'submitted'""",
-            (uid,),
-        )
-        all_rows = cur.fetchall()
-
-    kp_wrong: dict[str, int] = {}
-    kp_total: dict[str, int] = {}
-
-    for r in all_rows:
-        for kp in _parse_kp(r["knowledge_points"]):
-            kp_total[kp] = kp_total.get(kp, 0) + 1
-            if not r["is_correct"]:
-                kp_wrong[kp] = kp_wrong.get(kp, 0) + 1
-
-    result = []
-    for kp, wrong in sorted(kp_wrong.items(), key=lambda x: -x[1]):
-        total = kp_total.get(kp, wrong)
-        result.append(WeakPoint(
-            point=kp,
-            wrong_count=wrong,
-            total_count=total,
-            error_rate=round(wrong / total * 100, 1) if total else 0,
-        ))
-
-    return WeakPointsResponse(items=result[:limit], total=len(result))
+        for r in ranked[:limit]
+    ]
+    return WeakPointsResponse(items=items, total=len(ranked))
 
 
 @router.get("/api/v1/stats/history", response_model=HistoryResponse)

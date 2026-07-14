@@ -94,6 +94,20 @@ class ExamOut(BaseModel):
     items: list[ExamItemOut] = Field(default_factory=list)
 
 
+# ========== 智能组卷 ==========
+
+class SmartExamRequest(BaseModel):
+    requirement: str = Field(min_length=1, max_length=500, description="自然语言组卷需求")
+    level: str | None = Field(default=None, description="目标级别 N1~N5，不传由 AI 决定")
+    time_limit_minutes: int = Field(default=0, ge=0, le=180, description="限时（分钟），0 不限")
+
+
+class SmartExamOut(ExamOut):
+    """智能组卷结果：不含答案的试卷 + AI 组卷说明 + 库存不足提示。"""
+    rationale: str = ""
+    shortfalls: list[str] = Field(default_factory=list)
+
+
 # ========== 提交作答 ==========
 
 class AnswerIn(BaseModel):

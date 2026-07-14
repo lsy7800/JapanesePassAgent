@@ -15,6 +15,10 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from backend.api.deps import get_db, get_current_user
 from backend.api.exam_export import render_exam_markdown
+from backend.config.categories import get_categories
+from backend.services.exam_builder import build_exam, persist_exam
+from backend.services.exam_planner import plan_exam
+from backend.services.stats_service import compute_weak_points
 from backend.schemas.exam import (
     ExamGenerateRequest,
     ExamHistoryResponse,
@@ -24,6 +28,8 @@ from backend.schemas.exam import (
     ExamResultOut,
     ExamSummary,
     ResultItemOut,
+    SmartExamOut,
+    SmartExamRequest,
     SubmitRequest,
 )
 
@@ -117,23 +123,73 @@ def generate_exam(payload: ExamGenerateRequest, conn=Depends(get_db), current_us
             if not group_ids:
                 raise HTTPException(status_code=422, detail="没有符合条件的题目，无法组卷")
 
-            cursor.execute(
-                "INSERT INTO exams (user_id, level, total, time_limit, status) VALUES (%s, %s, %s, %s, 'created')",
-                (current_user["id"], payload.level or "", len(group_ids), payload.time_limit_minutes),
+            exam_id = persist_exam(
+                cursor,
+                level=payload.level,
+                group_ids=group_ids,
+                time_limit=payload.time_limit_minutes,
+                user_id=current_user["id"],
             )
-            exam_id = cursor.lastrowid
-
-            for seq, gid in enumerate(group_ids, start=1):
-                cursor.execute(
-                    "INSERT INTO exam_items (exam_id, seq, group_id) VALUES (%s, %s, %s)",
-                    (exam_id, seq, gid),
-                )
         conn.commit()
     except Exception:
         conn.rollback()
         raise
 
     return _build_exam(conn, exam_id)
+
+
+@router.post("/smart-generate", response_model=SmartExamOut, status_code=status.HTTP_201_CREATED)
+def smart_generate(
+    payload: SmartExamRequest,
+    conn=Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """AI 智能组卷：结合用户薄弱点，让 LLM 规划抽题方案并落库为可作答试卷。
+
+    流程：薄弱点聚合 → LLM 规划（内部已兜底，绝不因 LLM 异常而挂）→ 确定性建卷 → 返回不含答案的试卷 + 组卷说明。
+    """
+    uid = current_user["id"]
+
+    with conn.cursor() as cur:
+        weak = compute_weak_points(cur, uid)
+
+    available = [
+        {"code": c["code"], "name": c["name"]}
+        for c in get_categories(level=payload.level, examable_only=True)
+    ]
+
+    plan = plan_exam(payload.requirement, weak[:8], payload.level, available)
+
+    quotas = plan.get("category_quotas")
+    if quotas:
+        plans = [(code, cnt) for code, cnt in quotas.items()]
+    else:
+        plans = [(None, plan["total_questions"])]
+
+    try:
+        with conn.cursor() as cur:
+            result = build_exam(
+                cur,
+                level=plan["level"],
+                plans=plans,
+                difficulty_min=plan.get("difficulty_min"),
+                difficulty_max=plan.get("difficulty_max"),
+                time_limit=payload.time_limit_minutes,
+                user_id=uid,
+            )
+            if not result["exam_id"]:
+                raise HTTPException(status_code=422, detail="没有符合条件的题目，请调整需求后再试")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    exam = _build_exam(conn, result["exam_id"])
+    return SmartExamOut(
+        **exam.model_dump(),
+        rationale=plan["rationale"],
+        shortfalls=result["shortfalls"],
+    )
 
 
 def _build_exam(conn, exam_id: int) -> ExamOut:
