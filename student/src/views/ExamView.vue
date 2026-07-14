@@ -94,21 +94,18 @@ function jumpTo(seq) {
 // 用捕获阶段监听 scroll 才能捕捉到内层容器的滚动事件。
 let scrollRaf = null
 
-function currentRefY() {
-  // 以粘性答题栏底部为基准线；未取到时回退固定值
-  const bar = document.querySelector('.answer-bar')
-  return (bar ? bar.getBoundingClientRect().bottom : 120) + 8
-}
-
 function updateCurrent() {
-  if (!exam.value) return
-  const refY = currentRefY()
-  let cur = exam.value.items[0]?.seq ?? 1
+  if (!exam.value?.items?.length) return
+  const bar = document.querySelector('.answer-bar')
+  const barBottom = bar ? bar.getBoundingClientRect().bottom : 100
+  // 基准线取阅读区（粘性栏下方）约 40% 处，贴合"正在看的题"，避免高线导致滞后
+  const line = barBottom + (window.innerHeight - barBottom) * 0.4
+  let cur = exam.value.items[0].seq
   for (const item of exam.value.items) {
     const el = document.getElementById(`q-${item.seq}`)
     if (!el) continue
-    // 顶部已越过基准线的最后一题 = 当前占据视口顶部的题
-    if (el.getBoundingClientRect().top - refY <= 1) cur = item.seq
+    // 标题已越过基准线的最后一题 = 当前题
+    if (el.getBoundingClientRect().top <= line) cur = item.seq
     else break
   }
   currentSeq.value = cur
@@ -505,8 +502,11 @@ onUnmounted(() => {
   box-shadow: inset 0 0 0 1px #fff;
 }
 .chip.current {
-  outline: 2px solid #422006;
-  outline-offset: 1px;
+  border-color: #f59e0b;
+  transform: translateY(-2px) scale(1.08);
+  box-shadow: 0 3px 10px rgba(245, 158, 11, 0.45);
+  font-weight: 700;
+  z-index: 1;
 }
 .sheet-legend {
   display: flex;
