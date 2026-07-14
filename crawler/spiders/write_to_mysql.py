@@ -10,8 +10,8 @@ SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "db
 
 INSERT_GROUP_SQL = """
 INSERT INTO question_groups (
-    type, article, level, exam_date, difficulty, knowledge_points, source, source_ref
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+    type, category, article, level, exam_date, difficulty, knowledge_points, source, source_ref
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
 """
 
 INSERT_QUESTION_SQL = """
@@ -95,13 +95,14 @@ def init_schema(cursor):
     print("三表结构已就绪")
 
 
-def _insert_single_choice(cursor, item, source):
+def _insert_single_choice(cursor, item, source, category=None):
     """将一条校验后的单选题数据写入三表（1 题组 → 1 子题 → 4 选项）。"""
     source_ref = f"{source}#{item.get('id')}"
     knowledge_points = json.dumps(item.get("knowledge_points", []), ensure_ascii=False)
 
     cursor.execute(INSERT_GROUP_SQL, (
         "single_choice",
+        category,  # JLPT 题型 code（如 paraphrase/usage），见 backend/config/categories.py
         None,  # 单选题无文章
         item.get("level", ""),
         item.get("date", ""),
@@ -127,11 +128,14 @@ def _insert_single_choice(cursor, item, source):
         cursor.execute(INSERT_OPTION_SQL, (question_id, label, options.get(label, "")))
 
 
-def write_to_mysql(json_path, source=None):
+def write_to_mysql(json_path, source=None, category=None):
     """将校验后的 JSON 数据批量写入三表结构。
 
     幂等策略：按 source 整批替换（先删同 source 题组，级联清理子题与选项，再重新插入），
     重复导入不会产生脏数据。source 默认取文件名（去扩展名），如 result_67_validated。
+
+    category: JLPT 题型 code（见 backend/config/categories.py），写入 question_groups.category，
+    供线上考试/智能组卷按题型选题。同一文件应对应单一题型。
     """
     full_path = _resolve_data_path(json_path)
 
@@ -153,13 +157,13 @@ def write_to_mysql(json_path, source=None):
         success = 0
         for item in data:
             try:
-                _insert_single_choice(cursor, item, source)
+                _insert_single_choice(cursor, item, source, category)
                 success += 1
             except Exception as e:
                 print(f"写入失败 ID: {item.get('id')}, 错误: {e}")
 
         conn.commit()
-        print(f"写入完成: 成功 {success}/{len(data)}（source={source}）")
+        print(f"写入完成: 成功 {success}/{len(data)}（source={source}, category={category}）")
     finally:
         conn.close()
 

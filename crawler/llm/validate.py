@@ -192,6 +192,17 @@ def safe_parse(content):
         return json.loads(content[start:end+1])
 
 
+# 原始数据答案是数字 1-4，对应选项 a-d。模型偶尔不按提示做映射、直接回数字，
+# 故在代码里做确定性归一化，不依赖模型可靠性。
+_NUM_TO_LETTER = {"1": "a", "2": "b", "3": "c", "4": "d"}
+
+
+def normalize_answer(ans):
+    """把答案统一成 a/b/c/d：数字按位置映射，字母原样保留（去空格、转小写）。"""
+    s = str(ans).strip().lower()
+    return _NUM_TO_LETTER.get(s, s)
+
+
 def validate_result(res):
     assert res["answer"] in ["a", "b", "c", "d"]
     assert len(res["options"]) == 4
@@ -205,6 +216,8 @@ def process_one(question_data, question_type="type_1"):
 
     parsed = safe_parse(raw)
 
+    parsed["answer"] = normalize_answer(parsed.get("answer", ""))
+
     validate_result(parsed)
 
     return parsed
@@ -212,6 +225,7 @@ def process_one(question_data, question_type="type_1"):
 
 if __name__ == "__main__":
     import argparse
+    import os
 
     parser = argparse.ArgumentParser(description="JLPT题目校验")
     parser.add_argument("--type", dest="question_type", default="type_1",
@@ -219,27 +233,51 @@ if __name__ == "__main__":
                         help="题目类型")
     parser.add_argument("--input", required=True, help="输入JSON文件路径")
     parser.add_argument("--output", required=True, help="输出JSON文件路径")
+    parser.add_argument("--fresh", action="store_true",
+                        help="忽略已有输出，全部重新校验（默认断点续跑：跳过输出中已成功的题）")
     args = parser.parse_args()
 
     with open(args.input, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    validated_data = []
+    # 断点续跑：若输出已存在，载入已成功的题，本次只补齐缺失/失败的题，避免重复消耗 API。
+    validated_by_id = {}
+    if not args.fresh and os.path.exists(args.output):
+        with open(args.output, "r", encoding="utf-8") as f:
+            for q in json.load(f):
+                validated_by_id[q.get("id")] = q
+        print(f"检测到已有输出，{len(validated_by_id)} 题已完成，仅补齐剩余题目")
 
-    for item in data:
-        print(f"正在处理题目 ID: {item.get('id')}")
+    todo = [item for item in data if item.get("id") not in validated_by_id]
+    print(f"待处理 {len(todo)} 题（共 {len(data)} 题）")
+
+    def _save():
+        merged = sorted(validated_by_id.values(), key=lambda q: (q.get("id") is None, q.get("id")))
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(merged, f, ensure_ascii=False, indent=2)
+
+    success = 0
+    failed = []
+    for i, item in enumerate(todo, 1):
+        qid = item.get("id")
+        print(f"[{i}/{len(todo)}] 正在处理题目 ID: {qid}")
         try:
             result = process_one(item, question_type=args.question_type)
-            result["id"] = item.get("id")
-            validated_data.append(result)
-            print(f"处理成功 ID: {item.get('id')}")
+            result["id"] = qid
+            validated_by_id[qid] = result
+            success += 1
+            print(f"处理成功 ID: {qid}")
         except Exception as e:
-            print(f"处理失败 ID: {item.get('id')}, 错误: {e}")
+            failed.append(qid)
+            print(f"处理失败 ID: {qid}, 错误: {repr(e)}")
 
+        # 每 10 题落盘一次，防止中途崩溃前功尽弃
+        if i % 10 == 0:
+            _save()
         print("-" * 50)
         time.sleep(1)
 
-    print(f"处理完成，准备保存到 {args.output}")
-    with open(args.output, "w", encoding="utf-8") as f:
-        json.dump(validated_data, f, ensure_ascii=False, indent=2)
-    print("保存成功！")
+    _save()
+    print(f"处理完成，已保存到 {args.output}")
+    print(f"本轮成功 {success} 题，失败 {len(failed)} 题" + (f"，失败题号: {failed}" if failed else ""))
+    print(f"输出累计 {len(validated_by_id)} 题（可再次运行同一命令补齐失败项）")
