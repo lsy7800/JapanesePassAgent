@@ -67,7 +67,6 @@ const showSheet = ref(true)       // 答题卡展开/收起
 const submitted = ref(false)      // 已交卷（放行路由守卫，避免自跳被拦）
 let warned5 = false               // 5 分钟提醒只触发一次
 let warned1 = false               // 1 分钟提醒只触发一次
-let io = null                     // IntersectionObserver：追踪当前题
 
 const answeredCount = computed(() => Object.keys(answers).length)
 const flagCount = computed(() => Object.keys(flags).length)
@@ -91,26 +90,47 @@ function jumpTo(seq) {
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
-// 用 IntersectionObserver 追踪当前可见题号（取可见集合中最小 seq）
-function setupObserver() {
-  teardownObserver()
-  const visible = new Set()
-  io = new IntersectionObserver(
-    (entries) => {
-      for (const e of entries) {
-        const seq = Number(e.target.dataset.seq)
-        if (e.isIntersecting) visible.add(seq)
-        else visible.delete(seq)
-      }
-      if (visible.size) currentSeq.value = Math.min(...visible)
-    },
-    { rootMargin: '-120px 0px -60% 0px', threshold: 0 },
-  )
-  document.querySelectorAll('.q-card').forEach((el) => io.observe(el))
+// 滚动监听追踪当前题：滚动容器是 .app-main（非 window），
+// 用捕获阶段监听 scroll 才能捕捉到内层容器的滚动事件。
+let scrollRaf = null
+
+function currentRefY() {
+  // 以粘性答题栏底部为基准线；未取到时回退固定值
+  const bar = document.querySelector('.answer-bar')
+  return (bar ? bar.getBoundingClientRect().bottom : 120) + 8
 }
 
-function teardownObserver() {
-  if (io) { io.disconnect(); io = null }
+function updateCurrent() {
+  if (!exam.value) return
+  const refY = currentRefY()
+  let cur = exam.value.items[0]?.seq ?? 1
+  for (const item of exam.value.items) {
+    const el = document.getElementById(`q-${item.seq}`)
+    if (!el) continue
+    // 顶部已越过基准线的最后一题 = 当前占据视口顶部的题
+    if (el.getBoundingClientRect().top - refY <= 1) cur = item.seq
+    else break
+  }
+  currentSeq.value = cur
+}
+
+function onScroll() {
+  if (scrollRaf) return
+  scrollRaf = requestAnimationFrame(() => {
+    scrollRaf = null
+    updateCurrent()
+  })
+}
+
+function setupScrollSpy() {
+  teardownScrollSpy()
+  window.addEventListener('scroll', onScroll, true) // 捕获阶段，兼容内层滚动容器
+  updateCurrent()
+}
+
+function teardownScrollSpy() {
+  window.removeEventListener('scroll', onScroll, true)
+  if (scrollRaf) { cancelAnimationFrame(scrollRaf); scrollRaf = null }
 }
 
 // ── 防误退：刷新/关页原生拦截 ──
@@ -189,7 +209,7 @@ async function onGenerate() {
     phase.value = 'answering'
     armGuards()
     await nextTick()
-    setupObserver()
+    setupScrollSpy()
     if (data.time_limit > 0) startTimer(data.time_limit * 60)
   } catch (e) {
     ElMessage.error('组卷失败：' + (e.response?.data?.detail || e.message))
@@ -247,7 +267,7 @@ async function doSubmit() {
     // 交卷成功：放行守卫后再跳转结果页
     submitted.value = true
     disarmGuards()
-    teardownObserver()
+    teardownScrollSpy()
     router.push(`/result/${data.id}`)
   } catch (e) {
     ElMessage.error('交卷失败：' + (e.response?.data?.detail || e.message))
@@ -258,7 +278,7 @@ async function doSubmit() {
 function restart() {
   stopTimer()
   disarmGuards()
-  teardownObserver()
+  teardownScrollSpy()
   submitted.value = true // 主动返回配置页，不再触发离开确认
   exam.value = null
   Object.keys(answers).forEach((k) => delete answers[k])
@@ -269,7 +289,7 @@ function restart() {
 onUnmounted(() => {
   stopTimer()
   disarmGuards()
-  teardownObserver()
+  teardownScrollSpy()
 })
 </script>
 
