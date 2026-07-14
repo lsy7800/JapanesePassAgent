@@ -45,6 +45,21 @@ QUESTION_TYPES = {
             "绝不要把题干里的括号「（　）」或空格填入 marked。"
         ),
     },
+    "type_3": {
+        # 句子语法1（文法形式判断）：题干带括号空，四个选项为扁平列表，无划线词。
+        "fields": {
+            "text": "text",
+            "choice": "choice",
+            "answer": "answer",
+            "analysis": "analysis",
+            "date": "date",
+        },
+        "prompt_extra": (
+            "13. 本题为括号填空选语法题，marked 字段必须为空字符串 \"\"，"
+            "绝不要把题干里的括号「（　）」或空格填入 marked。"
+            "14. 解析请侧重语法形式与接续规则，说明为何该语法形式最契合括号处语境。"
+        ),
+    },
 }
 
 
