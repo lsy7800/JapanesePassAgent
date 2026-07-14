@@ -323,6 +323,17 @@ cd student && npm install && npm run dev
 uv run python -m crawler.spiders.write_to_mysql
 ```
 
+### 8. 运行测试
+
+后端测试基于 pytest，覆盖安全工具（密码哈希 / JWT）、认证接口、会话持久化与越权校验、题库读接口。
+
+```bash
+uv run pytest
+```
+
+> 测试会自动创建独立库 `jlpt_test`（用 `SHOW CREATE TABLE` 从当前库克隆结构，含外键），
+> 用完即 `DROP`，**不触碰真实 `jlpt` 数据**；无需联网、不调用 DeepSeek。
+
 ---
 
 ## 注意事项
