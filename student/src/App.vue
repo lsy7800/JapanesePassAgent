@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { EditPen, ChatDotRound, SwitchButton, List, TrendCharts, Expand, Link, Fold } from '@element-plus/icons-vue'
+import { EditPen, ChatDotRound, SwitchButton, List, TrendCharts, Expand, Link, Fold, HomeFilled } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth'
 
 const route = useRoute()
@@ -18,6 +18,7 @@ function toggleCollapse() {
 }
 
 const NAV_ITEMS = [
+  { index: '/home',    icon: HomeFilled,   label: '首页' },
   { index: '/exam',    icon: EditPen,      label: '在线考试' },
   { index: '/chat',    icon: ChatDotRound, label: 'AI 助手' },
   { index: '/history', icon: List,         label: '考试历史' },
@@ -25,6 +26,7 @@ const NAV_ITEMS = [
 ]
 
 const TITLE_MAP = {
+  home: '首页',
   exam: '在线考试',
   chat: 'AI 助手',
   history: '考试历史',

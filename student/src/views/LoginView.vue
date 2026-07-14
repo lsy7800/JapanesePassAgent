@@ -29,7 +29,7 @@ async function submit() {
       : await register(form.email, form.password)
     auth.setAuth(data)
     ElMessage.success(mode.value === 'login' ? '登录成功' : '注册成功')
-    const redirect = route.query.redirect || '/exam'
+    const redirect = route.query.redirect || '/home'
     router.push(redirect)
   } catch (e) {
     ElMessage.error(e.response?.data?.detail || '操作失败')

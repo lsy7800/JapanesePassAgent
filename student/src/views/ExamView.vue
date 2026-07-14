@@ -1,11 +1,12 @@
 <script setup>
 import { ref, reactive, computed, onUnmounted, watch, onMounted, nextTick } from 'vue'
-import { useRouter, onBeforeRouteLeave } from 'vue-router'
+import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Flag } from '@element-plus/icons-vue'
 import { generateExam, submitExam, getCategories, smartGenerateExam } from '../api/exam'
 
 const router = useRouter()
+const route = useRoute()
 
 const LEVEL_OPTIONS = ['N1', 'N2', 'N3', 'N4', 'N5']
 
@@ -70,7 +71,14 @@ const groupedCategories = computed(() => {
 })
 
 watch(() => config.level, loadCategories)
-onMounted(loadCategories)
+onMounted(() => {
+  loadCategories()
+  // 从首页「针对弱项智能组卷」跳入：预填 AI 模式与需求
+  if (route.query.ai === '1') {
+    mode.value = 'ai'
+    if (typeof route.query.req === 'string') ai.requirement = route.query.req
+  }
+})
 
 const loading = ref(false)
 const exam = ref(null)

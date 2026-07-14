@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
 import LoginView from '../views/LoginView.vue'
+import HomeView from '../views/HomeView.vue'
 import ExamView from '../views/ExamView.vue'
 import ChatView from '../views/ChatView.vue'
 import HistoryView from '../views/HistoryView.vue'
@@ -10,7 +11,8 @@ import StatsView from '../views/StatsView.vue'
 
 const routes = [
   { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
-  { path: '/', redirect: '/exam' },
+  { path: '/', redirect: '/home' },
+  { path: '/home', name: 'home', component: HomeView },
   { path: '/exam', name: 'exam', component: ExamView },
   { path: '/chat', name: 'chat', component: ChatView },
   { path: '/history', name: 'history', component: HistoryView },
