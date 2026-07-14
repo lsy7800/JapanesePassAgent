@@ -174,7 +174,7 @@ onMounted(refreshSessions)
   <div class="chat-layout">
     <!-- 历史会话侧栏 -->
     <aside class="session-pane">
-      <el-button class="new-btn" type="primary" plain @click="newSession">
+      <el-button class="new-btn" type="primary" @click="newSession">
         <el-icon style="margin-right: 4px"><Plus /></el-icon>新会话
       </el-button>
       <div class="session-list">
@@ -224,7 +224,7 @@ onMounted(refreshSessions)
                 v-for="(exp, ei) in m.exports"
                 :key="ei"
                 type="primary"
-                plain
+                class="dl-btn"
                 size="small"
                 :loading="downloading"
                 @click="onDownload(exp)"
@@ -275,6 +275,13 @@ onMounted(refreshSessions)
   overflow: hidden;
 }
 .new-btn { width: 100%; margin-bottom: 12px; flex-shrink: 0; }
+/* 金色实心按钮配深色文字，对比度更高、清晰可读（避免金底白字发虚） */
+.new-btn,
+.dl-btn {
+  --el-button-text-color: #422006;
+  --el-button-hover-text-color: #422006;
+  font-weight: 600;
+}
 .session-list {
   flex: 1;
   overflow-y: auto;
