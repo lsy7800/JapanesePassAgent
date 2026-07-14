@@ -78,7 +78,7 @@ def _build_question_context(question_data, config):
     return ctx
 
 
-def call_deepseek(prompt):
+def call_deepseek(prompt, retries=3, timeout=60):
     headers = {
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json"
@@ -93,12 +93,21 @@ def call_deepseek(prompt):
         "temperature": 0.2
     }
 
-    response = requests.post(API_URL, headers=headers, json=data)
-    result = response.json()
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            response = requests.post(API_URL, headers=headers, json=data, timeout=timeout)
+            response.raise_for_status()
+            result = response.json()
+            return result["choices"][0]["message"]["content"]
+        except (requests.RequestException, ValueError, KeyError, IndexError) as e:
+            # 网络错误 / 非 JSON 响应 / 返回结构异常（如限流错误体没有 choices）都在此兜住
+            last_err = e
+            print(f"  DeepSeek 调用失败（第 {attempt}/{retries} 次）: {e}")
+            if attempt < retries:
+                time.sleep(2 * attempt)  # 线性退避：2s、4s...
 
-    content = result["choices"][0]["message"]["content"]
-
-    return content
+    raise RuntimeError(f"DeepSeek 调用重试 {retries} 次仍失败: {last_err}")
 
 
 def build_prompt(question_data, question_type="type_1"):
