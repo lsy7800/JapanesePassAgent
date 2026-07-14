@@ -167,7 +167,8 @@ function renderContent(content, marked) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-  if (marked) {
+  // 划线词若只是空格括号占位符（填空题的空），不加横线，避免给括号划线
+  if (marked && String(marked).replace(/[（）()[\]\s　]/g, '')) {
     const esc = String(marked).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     s = s.replace(new RegExp(esc, 'g'), (m) => `<u class="marked-word">${m}</u>`)
   }

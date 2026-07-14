@@ -40,7 +40,10 @@ QUESTION_TYPES = {
             "analysis": "analysis",
             "date": "date",
         },
-        "prompt_extra": "",
+        "prompt_extra": (
+            "13. 本题为括号填空题，marked 字段必须为空字符串 \"\"，"
+            "绝不要把题干里的括号「（　）」或空格填入 marked。"
+        ),
     },
 }
 

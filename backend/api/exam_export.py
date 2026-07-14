@@ -3,6 +3,8 @@
 数据来自 exams / exam_items / question_groups / questions / options 五表，
 不调用 LLM。生成结构：抬头 → 题目卷（不含答案）→ （可选）答案与解析另起一节。
 """
+import re
+
 from backend.config.categories import category_name
 
 
@@ -101,7 +103,9 @@ def render_exam_markdown(cursor, exam_id: int, with_answers: bool = False) -> tu
         content = _as_text(it["content"])
         # 划线词用 Markdown 下划线（**加粗+下划线**），突出考点
         marked = _as_text(it["marked"])
-        if marked and marked in content:
+        # 仅当划线词是实义词时才划线；纯空格括号占位符（填空题的空）跳过
+        marked_core = re.sub(r"[（）()\[\]\s　]", "", marked)
+        if marked and marked_core and marked in content:
             content = content.replace(marked, f"<u>{marked}</u>")
         lines.append(content)
         lines.append("")
