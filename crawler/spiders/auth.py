@@ -44,16 +44,26 @@ def load_cookies(session: requests.Session) -> bool:
 
 
 def is_cookie_valid(session: requests.Session, test_url: str) -> bool:
+    """访问受保护页判断当前会话是否已登录。
+
+    可靠信号（经站点实测）：
+    - 未登录访问受保护页会被重定向回 login.php；
+    - 登录页/未登录页含密码输入表单 name="pass"，已登录页则没有。
+    不再用 "登录"/"login" 子串判断——已登录首页也含指向 login.php 的账户链接，会误判。
+    """
     try:
         resp = session.get(test_url, allow_redirects=True, timeout=DEFAULT_TIMEOUT)
-        # 如果被重定向到登录页，或页面包含登录表单，说明 cookie 无效
-        if "login" in resp.url.lower():
-            return False
-        if "登录" in resp.text or "login" in resp.text.lower():
-            return False
-        return resp.status_code == 200
     except requests.RequestException:
         return False
+    if resp.status_code != 200:
+        return False
+    # 被重定向到登录页 => 未登录
+    if "login.php" in resp.url.lower():
+        return False
+    # 页面仍带登录表单（密码框）=> 未登录
+    if 'name="pass"' in resp.text:
+        return False
+    return True
 
 
 def login(session: requests.Session, login_url: str, username: str, password: str,
