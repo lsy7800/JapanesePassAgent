@@ -66,13 +66,14 @@ CREATE TABLE IF NOT EXISTS exams (
     INDEX idx_user_id (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='考试试卷表';
 
--- 试卷题目与作答表：判分以题组为单位（当前均单选题，取题组首道子题答案比对；
--- 多子题题型如完形/阅读后续扩展时需细化到子题级）
+-- 试卷题目与作答表：判分细化到子题级。单选题一组一子题（sub_seq=1）；
+-- 完形/阅读一组多子题，每子题一行（同 group_id、sub_seq=1..N），seq 为全局可评分题号。
 CREATE TABLE IF NOT EXISTS exam_items (
     id          INT PRIMARY KEY AUTO_INCREMENT,
     exam_id     INT NOT NULL COMMENT '关联试卷ID',
-    seq         INT NOT NULL COMMENT '题目在试卷中的序号',
+    seq         INT NOT NULL COMMENT '全局可评分题号（作答/答题卡以此为键）',
     group_id    INT NOT NULL COMMENT '关联 question_groups.id',
+    sub_seq     INT NOT NULL DEFAULT 1 COMMENT '题组内子题序号（对应 questions.seq；单选题固定1）',
     user_answer VARCHAR(10) DEFAULT NULL COMMENT '用户作答 a/b/c/d（提交后写入）',
     is_correct  TINYINT DEFAULT NULL COMMENT '是否正确（提交后写入）',
     INDEX idx_exam (exam_id),

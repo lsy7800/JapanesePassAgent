@@ -9,7 +9,7 @@ from backend.config.categories import category_name
 
 
 def _fetch_export_data(cursor, exam_id: int) -> dict | None:
-    """取试卷抬头 + 各题（题干/划线词/选项/答案/解析/题型）。不存在返回 None。"""
+    """取试卷抬头 + 各卡片（按 group_id 分组：文章 + 子题；子题含题干/选项/答案/解析）。"""
     cursor.execute(
         "SELECT id, level, total, status FROM exams WHERE id = %s",
         (exam_id,),
@@ -19,22 +19,30 @@ def _fetch_export_data(cursor, exam_id: int) -> dict | None:
         return None
 
     cursor.execute(
-        "SELECT seq, group_id FROM exam_items WHERE exam_id = %s ORDER BY seq",
+        "SELECT seq, group_id, sub_seq FROM exam_items WHERE exam_id = %s ORDER BY seq",
         (exam_id,),
     )
-    item_rows = cursor.fetchall()
+    rows = cursor.fetchall()
 
-    items = []
-    for it in item_rows:
-        cursor.execute(
-            "SELECT category FROM question_groups WHERE id = %s",
-            (it["group_id"],),
-        )
-        g = cursor.fetchone()
+    items: list[dict] = []
+    for r in rows:
+        # 同题组连续 → 题组变化时开新卡片
+        if not items or items[-1]["group_id"] != r["group_id"]:
+            cursor.execute(
+                "SELECT category, article FROM question_groups WHERE id = %s",
+                (r["group_id"],),
+            )
+            g = cursor.fetchone()
+            items.append({
+                "group_id": r["group_id"],
+                "category": g["category"] if g else None,
+                "article": (g["article"] or "") if g else "",
+                "questions": [],
+            })
         cursor.execute(
             "SELECT id, content, marked, answer, analysis FROM questions "
-            "WHERE group_id = %s ORDER BY seq LIMIT 1",
-            (it["group_id"],),
+            "WHERE group_id = %s AND seq = %s LIMIT 1",
+            (r["group_id"], r["sub_seq"]),
         )
         q = cursor.fetchone()
         if not q:
@@ -44,9 +52,9 @@ def _fetch_export_data(cursor, exam_id: int) -> dict | None:
             (q["id"],),
         )
         options = [{"label": o["label"], "content": o["content"]} for o in cursor.fetchall()]
-        items.append({
-            "seq": it["seq"],
-            "category": g["category"] if g else None,
+        items[-1]["questions"].append({
+            "no": r["seq"],
+            "sub_seq": r["sub_seq"],
             "content": q["content"] or "",
             "marked": q["marked"] or "",
             "answer": q["answer"] or "",
@@ -69,11 +77,25 @@ def _as_text(v) -> str:
     return v if isinstance(v, str) else str(v)
 
 
+def _card_heading(card: dict) -> str:
+    """卡片标题：单子题「第 N 题」，多子题「第 X–Y 题」，附题型名。"""
+    qs = card["questions"]
+    if len(qs) > 1:
+        head = f"**第 {qs[0]['no']}–{qs[-1]['no']} 题**"
+    else:
+        head = f"**第 {qs[0]['no']} 题**"
+    cat = category_name(card["category"])
+    if cat:
+        head += f"　（{cat}）"
+    return head
+
+
 def render_exam_markdown(cursor, exam_id: int, with_answers: bool = False) -> tuple[str, str] | None:
     """渲染试卷为 Markdown。返回 (文件名, 内容)；试卷不存在返回 None。
 
     with_answers=False：仅题目卷。
     with_answers=True ：题目卷 + 末尾「答案与解析」一节，便于打印后自查。
+    完形题按「文章 + 逐空选项」渲染；单选题按「题干 + 选项」渲染。
     """
     data = _fetch_export_data(cursor, exam_id)
     if data is None:
@@ -93,25 +115,34 @@ def render_exam_markdown(cursor, exam_id: int, with_answers: bool = False) -> tu
     lines.append("")
 
     # 题目卷
-    for it in data["items"]:
-        cat = category_name(it["category"])
-        head = f"**第 {it['seq']} 题**"
-        if cat:
-            head += f"　（{cat}）"
-        lines.append(head)
+    for card in data["items"]:
+        qs = card["questions"]
+        if not qs:
+            continue
+        lines.append(_card_heading(card))
         lines.append("")
-        content = _as_text(it["content"])
-        # 划线词用 Markdown 下划线（**加粗+下划线**），突出考点
-        marked = _as_text(it["marked"])
-        # 仅当划线词是实义词时才划线；纯空格括号占位符（填空题的空）跳过
-        marked_core = re.sub(r"[（）()\[\]\s　]", "", marked)
-        if marked and marked_core and marked in content:
-            content = content.replace(marked, f"<u>{marked}</u>")
-        lines.append(content)
-        lines.append("")
-        for o in it["options"]:
-            lines.append(f"- {o['label'].upper()}. {_as_text(o['content'])}")
-        lines.append("")
+        if card["article"]:
+            # 完形：先文章，再逐空选项
+            lines.append(_as_text(card["article"]))
+            lines.append("")
+            for q in qs:
+                lines.append(f"**（{q['sub_seq']}）**")
+                for o in q["options"]:
+                    lines.append(f"- {o['label'].upper()}. {_as_text(o['content'])}")
+                lines.append("")
+        else:
+            # 单选：题干 + 选项；划线词用下划线突出（纯占位括号跳过）
+            q = qs[0]
+            content = _as_text(q["content"])
+            marked = _as_text(q["marked"])
+            marked_core = re.sub(r"[（）()\[\]\s　]", "", marked)
+            if marked and marked_core and marked in content:
+                content = content.replace(marked, f"<u>{marked}</u>")
+            lines.append(content)
+            lines.append("")
+            for o in q["options"]:
+                lines.append(f"- {o['label'].upper()}. {_as_text(o['content'])}")
+            lines.append("")
 
     # 答案与解析
     if with_answers:
@@ -119,14 +150,15 @@ def render_exam_markdown(cursor, exam_id: int, with_answers: bool = False) -> tu
         lines.append("")
         lines.append("## 答案与解析")
         lines.append("")
-        for it in data["items"]:
-            ans = _as_text(it["answer"]).upper()
-            lines.append(f"**第 {it['seq']} 题**　正确答案：**{ans}**")
-            analysis = _as_text(it["analysis"])
-            if analysis:
+        for card in data["items"]:
+            for q in card["questions"]:
+                ans = _as_text(q["answer"]).upper()
+                lines.append(f"**第 {q['no']} 题**　正确答案：**{ans}**")
+                analysis = _as_text(q["analysis"])
+                if analysis:
+                    lines.append("")
+                    lines.append(f"> {analysis}")
                 lines.append("")
-                lines.append(f"> {analysis}")
-            lines.append("")
 
     filename = f"JLPT_{level}_exam_{data['id']}.md"
     return filename, "\n".join(lines)

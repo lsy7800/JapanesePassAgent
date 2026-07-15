@@ -13,16 +13,32 @@ MAX_PER_PLAN = 50
 
 
 def persist_exam(cur, *, level: str | None, group_ids: list[int], time_limit: int, user_id: int | None) -> int:
-    """把一批题组落库为一张试卷，返回 exam_id。group_ids 顺序即题目 seq 顺序。"""
+    """把一批题组落库为一张试卷，返回 exam_id。group_ids 顺序即题目呈现顺序。
+
+    判分细化到子题：每个题组按 questions.seq 展开成若干可评分子题——
+    单选题一子题一行，完形/阅读多子题多行。exam_items.seq 为全局可评分题号（1..total），
+    sub_seq 对应 questions.seq；exams.total 为子题总数。
+    """
+    # 展开各题组的子题，得到 (全局seq, group_id, sub_seq) 行
+    rows: list[tuple[int, int, int]] = []
+    gseq = 0
+    for gid in group_ids:
+        cur.execute("SELECT seq FROM questions WHERE group_id = %s ORDER BY seq", (gid,))
+        subs = [r["seq"] for r in cur.fetchall()] or [1]
+        for sub in subs:
+            gseq += 1
+            rows.append((gseq, gid, sub))
+    total = gseq
+
     cur.execute(
         "INSERT INTO exams (user_id, level, total, time_limit, status) VALUES (%s, %s, %s, %s, 'created')",
-        (user_id, level or "", len(group_ids), time_limit or 0),
+        (user_id, level or "", total, time_limit or 0),
     )
     exam_id = cur.lastrowid
-    for seq, gid in enumerate(group_ids, start=1):
+    for global_seq, gid, sub in rows:
         cur.execute(
-            "INSERT INTO exam_items (exam_id, seq, group_id) VALUES (%s, %s, %s)",
-            (exam_id, seq, gid),
+            "INSERT INTO exam_items (exam_id, seq, group_id, sub_seq) VALUES (%s, %s, %s, %s)",
+            (exam_id, global_seq, gid, sub),
         )
     return exam_id
 

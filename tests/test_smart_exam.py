@@ -62,10 +62,11 @@ def test_smart_generate_with_quotas(client, make_user, seed_bank, monkeypatch):
     assert len(body["items"]) == 5
     assert body["rationale"] == "针对你的薄弱点组卷。"
     assert body["time_limit"] == 20
-    # 试卷不含答案
+    # 试卷不含答案（嵌套子题结构）
     first = body["items"][0]
-    assert "answer" not in first and "correct_answer" not in first
-    assert len(first["options"]) == 4
+    sub = first["questions"][0]
+    assert "answer" not in sub and "correct_answer" not in sub
+    assert len(sub["options"]) == 4
 
 
 def test_smart_generate_links_user_and_gradable(client, make_user, seed_bank, monkeypatch, db):
@@ -85,8 +86,8 @@ def test_smart_generate_links_user_and_gradable(client, make_user, seed_bank, mo
     with db.cursor() as cur:
         cur.execute("SELECT user_id FROM exams WHERE id = %s", (exam_id,))
         assert cur.fetchone()["user_id"] == u["id"]
-    # 可提交判分
-    answers = [{"seq": it["seq"], "answer": "a"} for it in r.json()["items"]]
+    # 可提交判分（作答键为子题全局题号 no）
+    answers = [{"seq": q["no"], "answer": "a"} for it in r.json()["items"] for q in it["questions"]]
     sr = client.post(f"/api/v1/exams/{exam_id}/submit", json={"answers": answers}, headers=u["headers"])
     assert sr.status_code == 200
     assert sr.json()["score"] == len(answers)  # 全部选 a，题库答案都是 a

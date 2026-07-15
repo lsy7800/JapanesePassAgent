@@ -6,7 +6,7 @@
 - POST /api/v1/exams/{exam_id}/submit 提交答案并判分
 - GET  /api/v1/exams/{exam_id}/result 获取结果（含正确答案与解析）
 
-判分以题组为单位：当前题库均为单选题（1题组1子题），取题组首道子题的 answer 比对。
+判分细化到子题级：单选题一题组一子题；完形/阅读一题组多子题，逐子题比对答案。
 不调用 LLM，纯比对，结果确定。
 """
 from urllib.parse import quote
@@ -26,8 +26,10 @@ from backend.schemas.exam import (
     ExamOptionOut,
     ExamOut,
     ExamResultOut,
+    ExamSubQuestion,
     ExamSummary,
     ResultItemOut,
+    ResultSubQuestion,
     SmartExamOut,
     SmartExamRequest,
     SubmitRequest,
@@ -44,12 +46,21 @@ def _group_options(cursor, question_id: int) -> list[ExamOptionOut]:
     return [ExamOptionOut(label=o["label"], content=o["content"]) for o in cursor.fetchall()]
 
 
-def _first_question(cursor, group_id: int):
-    """取题组首道子题（含 answer/analysis/content）。当前均单选题，一组一题。"""
+def _group_meta(cursor, group_id: int):
+    """取题组元信息（题型/级别/文章）。"""
+    cursor.execute(
+        "SELECT type, level, article FROM question_groups WHERE id = %s",
+        (group_id,),
+    )
+    return cursor.fetchone()
+
+
+def _sub_question(cursor, group_id: int, sub_seq: int):
+    """取题组内指定子题（按 questions.seq 定位；含 answer/analysis/content）。"""
     cursor.execute(
         """SELECT id, content, marked, answer, analysis
-           FROM questions WHERE group_id = %s ORDER BY seq LIMIT 1""",
-        (group_id,),
+           FROM questions WHERE group_id = %s AND seq = %s LIMIT 1""",
+        (group_id, sub_seq),
     )
     return cursor.fetchone()
 
@@ -193,7 +204,10 @@ def smart_generate(
 
 
 def _build_exam(conn, exam_id: int) -> ExamOut:
-    """组装试卷（不含答案），供 generate 与 get 复用。"""
+    """组装试卷（不含答案），供 generate 与 get 复用。
+
+    exam_items 逐子题一行；按 group_id 分组成卡片（单选题一卡一子题，完形题一卡文章 + N 子题）。
+    """
     with conn.cursor() as cursor:
         cursor.execute("SELECT id, level, total, time_limit, status FROM exams WHERE id = %s", (exam_id,))
         exam = cursor.fetchone()
@@ -201,31 +215,33 @@ def _build_exam(conn, exam_id: int) -> ExamOut:
             raise HTTPException(status_code=404, detail=f"试卷 {exam_id} 不存在")
 
         cursor.execute(
-            "SELECT seq, group_id FROM exam_items WHERE exam_id = %s ORDER BY seq",
+            "SELECT seq, group_id, sub_seq FROM exam_items WHERE exam_id = %s ORDER BY seq",
             (exam_id,),
         )
-        items_raw = cursor.fetchall()
+        rows = cursor.fetchall()
 
-        items = []
-        for it in items_raw:
-            cursor.execute(
-                "SELECT type, level FROM question_groups WHERE id = %s",
-                (it["group_id"],),
-            )
-            g = cursor.fetchone()
-            q = _first_question(cursor, it["group_id"])
-            options = _group_options(cursor, q["id"]) if q else []
-            items.append(
-                ExamItemOut(
-                    seq=it["seq"],
-                    group_id=it["group_id"],
+        items: list[ExamItemOut] = []
+        for r in rows:
+            # rows 按 seq 升序、同题组连续 → 题组变化时开一张新卡片
+            if not items or items[-1].group_id != r["group_id"]:
+                g = _group_meta(cursor, r["group_id"])
+                items.append(ExamItemOut(
+                    seq=len(items) + 1,
+                    group_id=r["group_id"],
                     type=g["type"] if g else "",
                     level=(g["level"] or "") if g else "",
-                    content=q["content"] if q else None,
-                    marked=(q["marked"] or "") if q else "",
-                    options=options,
-                )
-            )
+                    article=g["article"] if g else None,
+                    questions=[],
+                ))
+            q = _sub_question(cursor, r["group_id"], r["sub_seq"])
+            options = _group_options(cursor, q["id"]) if q else []
+            items[-1].questions.append(ExamSubQuestion(
+                no=r["seq"],
+                sub_seq=r["sub_seq"],
+                content=q["content"] if q else None,
+                marked=(q["marked"] or "") if q else "",
+                options=options,
+            ))
 
     return ExamOut(
         id=exam["id"],
@@ -262,28 +278,29 @@ def submit_exam(exam_id: int, payload: SubmitRequest, conn=Depends(get_db), curr
             if exam["status"] == "submitted":
                 raise HTTPException(status_code=409, detail="试卷已提交，不能重复提交")
 
-            # 建立 seq -> group_id 映射
+            # 逐子题作答：seq 为全局可评分题号
             cursor.execute(
-                "SELECT seq, group_id FROM exam_items WHERE exam_id = %s",
+                "SELECT seq, group_id, sub_seq FROM exam_items WHERE exam_id = %s",
                 (exam_id,),
             )
-            seq_to_group = {r["seq"]: r["group_id"] for r in cursor.fetchall()}
+            item_rows = cursor.fetchall()
+            valid_seqs = {r["seq"] for r in item_rows}
 
             answer_map = {a.seq: a.answer for a in payload.answers}
-            unknown = [s for s in answer_map if s not in seq_to_group]
+            unknown = [s for s in answer_map if s not in valid_seqs]
             if unknown:
                 raise HTTPException(status_code=422, detail=f"作答包含试卷中不存在的题号：{unknown}")
 
             score = 0
-            for seq, gid in seq_to_group.items():
-                user_ans = answer_map.get(seq)  # 未作答为 None
-                q = _first_question(cursor, gid)
+            for r in item_rows:
+                user_ans = answer_map.get(r["seq"])  # 未作答为 None
+                q = _sub_question(cursor, r["group_id"], r["sub_seq"])
                 correct = q["answer"] if q else ""
                 is_correct = 1 if (user_ans is not None and user_ans == correct) else 0
                 score += is_correct
                 cursor.execute(
                     "UPDATE exam_items SET user_answer = %s, is_correct = %s WHERE exam_id = %s AND seq = %s",
-                    (user_ans, is_correct, exam_id, seq),
+                    (user_ans, is_correct, exam_id, r["seq"]),
                 )
 
             cursor.execute(
@@ -299,7 +316,7 @@ def submit_exam(exam_id: int, payload: SubmitRequest, conn=Depends(get_db), curr
 
 
 def _build_result(conn, exam_id: int) -> ExamResultOut:
-    """组装结果（含正确答案与解析），供 submit 与 result 复用。"""
+    """组装结果（含正确答案与解析），供 submit 与 result 复用。按 group_id 分组成卡片。"""
     with conn.cursor() as cursor:
         cursor.execute("SELECT id, level, total, score, status FROM exams WHERE id = %s", (exam_id,))
         exam = cursor.fetchone()
@@ -307,28 +324,35 @@ def _build_result(conn, exam_id: int) -> ExamResultOut:
             raise HTTPException(status_code=404, detail=f"试卷 {exam_id} 不存在")
 
         cursor.execute(
-            "SELECT seq, group_id, user_answer, is_correct FROM exam_items WHERE exam_id = %s ORDER BY seq",
+            "SELECT seq, group_id, sub_seq, user_answer, is_correct FROM exam_items WHERE exam_id = %s ORDER BY seq",
             (exam_id,),
         )
         rows = cursor.fetchall()
 
-        items = []
+        items: list[ResultItemOut] = []
         for r in rows:
-            q = _first_question(cursor, r["group_id"])
-            options = _group_options(cursor, q["id"]) if q else []
-            items.append(
-                ResultItemOut(
-                    seq=r["seq"],
+            if not items or items[-1].group_id != r["group_id"]:
+                g = _group_meta(cursor, r["group_id"])
+                items.append(ResultItemOut(
+                    seq=len(items) + 1,
                     group_id=r["group_id"],
-                    content=q["content"] if q else None,
-                    marked=(q["marked"] or "") if q else "",
-                    options=options,
-                    user_answer=r["user_answer"],
-                    correct_answer=q["answer"] if q else "",
-                    is_correct=bool(r["is_correct"]),
-                    analysis=q["analysis"] if q else None,
-                )
-            )
+                    type=g["type"] if g else "",
+                    article=g["article"] if g else None,
+                    questions=[],
+                ))
+            q = _sub_question(cursor, r["group_id"], r["sub_seq"])
+            options = _group_options(cursor, q["id"]) if q else []
+            items[-1].questions.append(ResultSubQuestion(
+                no=r["seq"],
+                sub_seq=r["sub_seq"],
+                content=q["content"] if q else None,
+                marked=(q["marked"] or "") if q else "",
+                options=options,
+                user_answer=r["user_answer"],
+                correct_answer=q["answer"] if q else "",
+                is_correct=bool(r["is_correct"]),
+                analysis=q["analysis"] if q else None,
+            ))
 
     return ExamResultOut(
         id=exam["id"],

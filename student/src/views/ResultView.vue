@@ -56,31 +56,32 @@ async function load() {
   }
 }
 
-function judgeItem(item) {
-  if (judgeState.value[item.seq]?.streaming) return
+function judgeItem(item, q) {
+  if (judgeState.value[q.no]?.streaming) return
   closeCurrentStream?.()
 
   const opts = {}
-  for (const o of item.options) opts[o.label] = o.content
+  for (const o of q.options) opts[o.label] = o.content
 
+  const ctx = item.article ? `文章：${item.article}\n本题为文章中第（${q.sub_seq}）空。\n` : ''
   const message = `请用 answer_judge 工具分析这道题：
-题目：${item.content}
+${ctx}题目：${q.content || '（见文章空格）'}
 选项：${Object.entries(opts).map(([k, v]) => `${k.toUpperCase()}. ${v}`).join('  ')}
-正确答案：${item.correct_answer}
-我的答案：${item.user_answer || '未作答'}
-解析参考：${item.analysis || '无'}`
+正确答案：${q.correct_answer}
+我的答案：${q.user_answer || '未作答'}
+解析参考：${q.analysis || '无'}`
 
-  judgeState.value[item.seq] = { text: '', streaming: true, error: false }
+  judgeState.value[q.no] = { text: '', streaming: true, error: false }
 
   closeCurrentStream = chatStream(message, null, {
-    onToken(content) { judgeState.value[item.seq].text += content },
+    onToken(content) { judgeState.value[q.no].text += content },
     onDone() {
-      judgeState.value[item.seq].streaming = false
+      judgeState.value[q.no].streaming = false
       closeCurrentStream = null
     },
     onError(detail) {
-      judgeState.value[item.seq].streaming = false
-      judgeState.value[item.seq].error = true
+      judgeState.value[q.no].streaming = false
+      judgeState.value[q.no].error = true
       ElMessage.error('AI 解析失败：' + detail)
       closeCurrentStream = null
     },
@@ -133,51 +134,60 @@ onMounted(load)
         </div>
       </el-card>
 
-      <!-- 每道题 -->
-      <el-card v-for="item in result.items" :key="item.seq" shadow="never" class="q-card">
-        <div class="q-title">
-          <span class="q-seq">第 {{ item.seq }} 题</span>
-          <el-tag :type="item.is_correct ? 'success' : 'danger'" size="small">
-            {{ item.is_correct ? '正确' : '错误' }}
-          </el-tag>
-          <el-button
-            v-if="!item.is_correct"
-            size="small"
-            type="primary"
-            plain
-            :loading="judgeState[item.seq]?.streaming"
-            class="ai-btn"
-            @click="judgeItem(item)"
-          >
-            {{ judgeState[item.seq]?.text ? '重新解析' : 'AI 解析' }}
-          </el-button>
-        </div>
+      <!-- 每张卡片：单选题 1 子题；完形题文章 + N 子题 -->
+      <el-card v-for="item in result.items" :key="item.group_id" shadow="never" class="q-card">
+        <div v-if="item.article" class="q-article" v-html="renderContent(item.article, '')"></div>
 
-        <div class="q-content" v-html="renderContent(item.content, item.marked)"></div>
-
-        <div class="opt-list">
-          <div
-            v-for="opt in item.options"
-            :key="opt.label"
-            class="opt-row"
-            :class="{
-              correct: opt.label === item.correct_answer,
-              wrong: opt.label === item.user_answer && !item.is_correct,
-            }"
-          >
-            {{ opt.label.toUpperCase() }}. {{ opt.content }}
-            <span v-if="opt.label === item.correct_answer" class="mark">✓ 正确答案</span>
-            <span v-else-if="opt.label === item.user_answer" class="mark">✗ 你的答案</span>
+        <div
+          v-for="q in item.questions"
+          :key="q.no"
+          class="sub-q"
+        >
+          <div class="q-title">
+            <span class="q-seq">第 {{ q.no }} 题</span>
+            <el-tag v-if="item.article" size="small" type="warning">（{{ q.sub_seq }}）</el-tag>
+            <el-tag :type="q.is_correct ? 'success' : 'danger'" size="small">
+              {{ q.is_correct ? '正确' : '错误' }}
+            </el-tag>
+            <el-button
+              v-if="!q.is_correct"
+              size="small"
+              type="primary"
+              plain
+              :loading="judgeState[q.no]?.streaming"
+              class="ai-btn"
+              @click="judgeItem(item, q)"
+            >
+              {{ judgeState[q.no]?.text ? '重新解析' : 'AI 解析' }}
+            </el-button>
           </div>
-        </div>
 
-        <div v-if="!item.user_answer" class="unanswered">（未作答）</div>
-        <div v-if="item.analysis" class="analysis">{{ item.analysis }}</div>
+          <div v-if="q.content" class="q-content" v-html="renderContent(q.content, q.marked)"></div>
 
-        <div v-if="judgeState[item.seq]?.text || judgeState[item.seq]?.streaming" class="ai-analysis">
-          <div class="ai-label">🤖 AI 解析</div>
-          <div class="md" v-html="renderMd(judgeState[item.seq].text)" />
-          <span v-if="judgeState[item.seq]?.streaming" class="cursor">▍</span>
+          <div class="opt-list">
+            <div
+              v-for="opt in q.options"
+              :key="opt.label"
+              class="opt-row"
+              :class="{
+                correct: opt.label === q.correct_answer,
+                wrong: opt.label === q.user_answer && !q.is_correct,
+              }"
+            >
+              {{ opt.label.toUpperCase() }}. {{ opt.content }}
+              <span v-if="opt.label === q.correct_answer" class="mark">✓ 正确答案</span>
+              <span v-else-if="opt.label === q.user_answer" class="mark">✗ 你的答案</span>
+            </div>
+          </div>
+
+          <div v-if="!q.user_answer" class="unanswered">（未作答）</div>
+          <div v-if="q.analysis" class="analysis">{{ q.analysis }}</div>
+
+          <div v-if="judgeState[q.no]?.text || judgeState[q.no]?.streaming" class="ai-analysis">
+            <div class="ai-label">🤖 AI 解析</div>
+            <div class="md" v-html="renderMd(judgeState[q.no].text)" />
+            <span v-if="judgeState[q.no]?.streaming" class="cursor">▍</span>
+          </div>
         </div>
       </el-card>
 
@@ -243,6 +253,20 @@ onMounted(load)
 .q-seq { font-weight: 600; }
 .ai-btn { margin-left: auto; }
 .q-content { font-size: 15px; line-height: 1.7; margin-bottom: 12px; }
+
+/* 完形题文章块 */
+.q-article {
+  font-size: 15px;
+  line-height: 1.9;
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  background: #fbfaf7;
+  border-left: 3px solid #f59e0b;
+  border-radius: 6px;
+  word-break: break-word;
+}
+/* 子题块：完形题一卡多子题，用虚线分隔 */
+.sub-q + .sub-q { margin-top: 14px; padding-top: 14px; border-top: 1px dashed #ebeef5; }
 
 /* 排序题空位槽（grammar_order） */
 .q-content :deep(.sort-slot) {

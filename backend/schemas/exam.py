@@ -75,14 +75,23 @@ class ExamOptionOut(BaseModel):
     content: RichText
 
 
-class ExamItemOut(BaseModel):
-    seq: int = Field(description="题目在试卷中的序号")
-    group_id: int
-    type: str
-    level: str = ""
+class ExamSubQuestion(BaseModel):
+    """一道可评分子题。单选题一题组一子题；完形/阅读一题组多子题。"""
+    no: int = Field(description="全局可评分题号，作答/答题卡以此为键")
+    sub_seq: int = Field(default=1, description="题组内子题序号（对应文章空号）")
     content: RichText | None = None
     marked: str = ""
     options: list[ExamOptionOut] = Field(default_factory=list)
+
+
+class ExamItemOut(BaseModel):
+    """一张卡片 = 一个题组。单选题含 1 子题；完形题含文章 + N 子题。"""
+    seq: int = Field(description="卡片在试卷中的顺序")
+    group_id: int
+    type: str
+    level: str = ""
+    article: RichText | None = None
+    questions: list[ExamSubQuestion] = Field(default_factory=list)
 
 
 class ExamOut(BaseModel):
@@ -135,9 +144,9 @@ class SubmitRequest(BaseModel):
 
 # ========== 结果（含答案与解析） ==========
 
-class ResultItemOut(BaseModel):
-    seq: int
-    group_id: int
+class ResultSubQuestion(BaseModel):
+    no: int = Field(description="全局可评分题号")
+    sub_seq: int = Field(default=1, description="题组内子题序号")
     content: RichText | None = None
     marked: str = ""
     options: list[ExamOptionOut] = Field(default_factory=list)
@@ -145,6 +154,14 @@ class ResultItemOut(BaseModel):
     correct_answer: str = ""
     is_correct: bool = False
     analysis: RichText | None = None
+
+
+class ResultItemOut(BaseModel):
+    seq: int
+    group_id: int
+    type: str = ""
+    article: RichText | None = None
+    questions: list[ResultSubQuestion] = Field(default_factory=list)
 
 
 class ExamResultOut(BaseModel):
