@@ -39,6 +39,17 @@ function renderContent(content, marked) {
   return s.replace(/\n/g, '<br/>')
 }
 
+// 渲染完形文章：转义 + 高亮空号 （1）（2）…（3a）+ 保留换行
+function renderArticle(article) {
+  if (article == null) return ''
+  let s = String(article)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  s = s.replace(/（\d+[a-zA-Z]?）/g, (m) => `<span class="cloze-blank">${m}</span>`)
+  return s.replace(/\n/g, '<br/>')
+}
+
 function renderMd(text) {
   return marked.parse(text || '')
 }
@@ -136,7 +147,7 @@ onMounted(load)
 
       <!-- 每张卡片：单选题 1 子题；完形题文章 + N 子题 -->
       <el-card v-for="item in result.items" :key="item.group_id" shadow="never" class="q-card">
-        <div v-if="item.article" class="q-article" v-html="renderContent(item.article, '')"></div>
+        <div v-if="item.article" class="q-article" v-html="renderArticle(item.article)"></div>
 
         <div
           v-for="q in item.questions"
@@ -265,6 +276,12 @@ onMounted(load)
   border-left: 3px solid #f59e0b;
   border-radius: 6px;
   word-break: break-word;
+}
+/* 完形空号高亮 */
+.q-article :deep(.cloze-blank) {
+  color: #d97706;
+  font-weight: 700;
+  padding: 0 1px;
 }
 /* 子题块：完形题一卡多子题，用虚线分隔 */
 .sub-q + .sub-q { margin-top: 14px; padding-top: 14px; border-top: 1px dashed #ebeef5; }

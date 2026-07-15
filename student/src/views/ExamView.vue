@@ -223,6 +223,17 @@ function renderContent(content, marked) {
   return s.replace(/\n/g, '<br/>')
 }
 
+// 渲染完形文章：转义 + 高亮空号 （1）（2）…（3a）+ 保留换行
+function renderArticle(article) {
+  if (article == null) return ''
+  let s = String(article)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  s = s.replace(/（\d+[a-zA-Z]?）/g, (m) => `<span class="cloze-blank">${m}</span>`)
+  return s.replace(/\n/g, '<br/>')
+}
+
 function fmtTime(sec) {
   const m = Math.floor(sec / 60)
   const s = sec % 60
@@ -548,7 +559,7 @@ onUnmounted(() => {
         class="q-card"
       >
         <!-- 完形题：先展示文章（内含 （N） 空） -->
-        <div v-if="item.article" class="q-article" v-html="renderContent(item.article, '')"></div>
+        <div v-if="item.article" class="q-article" v-html="renderArticle(item.article)"></div>
 
         <!-- 子题：单选题 1 道；完形题 N 道 -->
         <div
@@ -737,7 +748,12 @@ onUnmounted(() => {
   border-radius: 6px;
   word-break: break-word;
 }
-/* 子题块：完形题一卡多子题，用虚线分隔；跳转锚点在子题上，需避开粘性栏 */
+/* 完形空号高亮 */
+.q-article :deep(.cloze-blank) {
+  color: #d97706;
+  font-weight: 700;
+  padding: 0 1px;
+}
 .sub-q { scroll-margin-top: 160px; }
 .sub-q + .sub-q { margin-top: 8px; padding-top: 12px; border-top: 1px dashed #ebeef5; }
 .q-title { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
