@@ -128,6 +128,54 @@ def _insert_single_choice(cursor, item, source, category=None):
         cursor.execute(INSERT_OPTION_SQL, (question_id, label, options.get(label, "")))
 
 
+def _insert_cloze(cursor, passage, source, category):
+    """将一篇文章完形题写入三表（1 题组 + article + N 子题，每子题 4 选项）。
+
+    难度/知识点是组级字段：难度取各空均值（取整），知识点取各空并集去重。
+    子题 content 留空（题干在文章里），marked 留空。
+    """
+    source_ref = f"{source}#{passage.get('id')}"
+    questions = passage.get("questions", [])
+
+    # 组级难度 = 各空难度均值（忽略 0/缺失）；知识点 = 各空并集去重（保序）
+    diffs = [_parse_difficulty(q.get("difficulty")) for q in questions]
+    diffs = [d for d in diffs if d > 0]
+    group_diff = round(sum(diffs) / len(diffs)) if diffs else 0
+    kps = []
+    for q in questions:
+        for kp in (q.get("knowledge_points") or []):
+            if kp not in kps:
+                kps.append(kp)
+    knowledge_points = json.dumps(kps, ensure_ascii=False)
+
+    cursor.execute(INSERT_GROUP_SQL, (
+        "cloze",
+        category,
+        passage.get("article"),  # 完形题存文章
+        passage.get("level", ""),
+        passage.get("date", ""),
+        group_diff,
+        knowledge_points,
+        source,
+        source_ref,
+    ))
+    group_id = cursor.lastrowid
+
+    for i, q in enumerate(questions, 1):
+        cursor.execute(INSERT_QUESTION_SQL, (
+            group_id,
+            q.get("no", i),   # 子题顺序号 = 空号
+            "",               # content 留空（题干在文章里）
+            "",               # marked 留空
+            q.get("answer", ""),
+            q.get("analysis", ""),
+        ))
+        question_id = cursor.lastrowid
+        options = q.get("options", {})
+        for label in OPTION_LABELS:
+            cursor.execute(INSERT_OPTION_SQL, (question_id, label, options.get(label, "")))
+
+
 def write_to_mysql(json_path, source=None, category=None):
     """将校验后的 JSON 数据批量写入三表结构。
 
@@ -164,6 +212,43 @@ def write_to_mysql(json_path, source=None, category=None):
 
         conn.commit()
         print(f"写入完成: 成功 {success}/{len(data)}（source={source}, category={category}）")
+    finally:
+        conn.close()
+
+
+def write_passage_to_mysql(json_path, source=None, category="text_grammar"):
+    """将校验后的文章完形题（嵌套结构）批量写入三表。
+
+    与 write_to_mysql 相同的幂等策略（按 source 整批替换）。每篇文章 = 1 个 cloze 题组 +
+    N 个子题；category 默认 text_grammar。
+    """
+    full_path = _resolve_data_path(json_path)
+    if source is None:
+        source = os.path.splitext(os.path.basename(json_path))[0]
+
+    with open(full_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    conn = pymysql.connect(**DB_CONFIG)
+    try:
+        cursor = conn.cursor()
+        init_schema(cursor)
+
+        cursor.execute(DELETE_SOURCE_SQL, (source,))
+        print(f"已清理来源 '{source}' 的旧数据")
+
+        groups = 0
+        subs = 0
+        for passage in data:
+            try:
+                _insert_cloze(cursor, passage, source, category)
+                groups += 1
+                subs += len(passage.get("questions", []))
+            except Exception as e:
+                print(f"写入失败 篇 ID: {passage.get('id')}, 错误: {e}")
+
+        conn.commit()
+        print(f"写入完成: {groups}/{len(data)} 篇，共 {subs} 小题（source={source}, category={category}）")
     finally:
         conn.close()
 
