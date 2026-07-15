@@ -223,7 +223,7 @@ function renderContent(content, marked) {
   return s.replace(/\n/g, '<br/>')
 }
 
-// 渲染完形文章：转义 + 高亮空号 （1）（2）…（3a）+ 保留换行
+// 渲染文章（完形/阅读）：转义 + 高亮空号 （1）… + 下划线标记 【U】…【/U】+ 保留换行
 function renderArticle(article) {
   if (article == null) return ''
   let s = String(article)
@@ -231,6 +231,8 @@ function renderArticle(article) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
   s = s.replace(/（\d+[a-zA-Z]?）/g, (m) => `<span class="cloze-blank">${m}</span>`)
+  // 阅读文章下划线标记：【U】…【/U】→ 下划线（问句常引用划线词）
+  s = s.replace(/【U】([\s\S]*?)【\/U】/g, (_m, inner) => `<u class="reading-underline">${inner}</u>`)
   return s.replace(/\n/g, '<br/>')
 }
 
@@ -753,6 +755,12 @@ onUnmounted(() => {
   color: #d97706;
   font-weight: 700;
   padding: 0 1px;
+}
+/* 阅读文章下划线（问句引用的划线词） */
+.q-article :deep(.reading-underline) {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
 }
 .sub-q { scroll-margin-top: 160px; }
 .sub-q + .sub-q { margin-top: 8px; padding-top: 12px; border-top: 1px dashed #ebeef5; }
