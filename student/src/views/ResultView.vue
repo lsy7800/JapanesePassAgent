@@ -24,6 +24,13 @@ function renderContent(content, marked) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
+  // 排序题（grammar_order）：题干含空位标记 ＿＿ / ＿★＿，渲染成槽位，★ 处金色高亮
+  if (s.includes('＿★＿')) {
+    s = s
+      .replace(/＿★＿/g, '<span class="sort-slot sort-slot--star"><i>★</i></span>')
+      .replace(/＿＿/g, '<span class="sort-slot"></span>')
+    return s.replace(/\n/g, '<br/>')
+  }
   // 划线词若只是空格括号占位符（填空题的空），不加横线，避免给括号划线
   if (marked && String(marked).replace(/[（）()[\]\s　]/g, '')) {
     const esc = String(marked).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -236,6 +243,36 @@ onMounted(load)
 .q-seq { font-weight: 600; }
 .ai-btn { margin-left: auto; }
 .q-content { font-size: 15px; line-height: 1.7; margin-bottom: 12px; }
+
+/* 排序题空位槽（grammar_order） */
+.q-content :deep(.sort-slot) {
+  display: inline-block;
+  position: relative;
+  min-width: 46px;
+  height: 1.25em;
+  margin: 0 3px;
+  /* 空 inline-block 以底边对齐文字基线，星标槽的 ★ 绝对定位后同为空盒 → 底线对齐 */
+  vertical-align: baseline;
+  border-bottom: 2px solid #c0c4cc;
+}
+.q-content :deep(.sort-slot--star) {
+  border-bottom-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  border-radius: 4px 4px 0 0;
+}
+.q-content :deep(.sort-slot--star i) {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 1px;
+  text-align: center;
+  font-size: 0.8em;
+  line-height: 1;
+  color: #d97706;
+  font-style: normal;
+  font-weight: 700;
+  pointer-events: none;
+}
 
 .opt-list { display: flex; flex-direction: column; gap: 8px; }
 .opt-row {

@@ -123,12 +123,23 @@ let scrollRaf = null
 
 function updateCurrent() {
   if (!exam.value?.items?.length) return
+  const items = exam.value.items
+  // 已滚到底：强制高亮最后一题。最后一题下方无内容可滚，其标题永远越不过基准线，
+  // 否则滚到底也只停在倒数第二题。兼容 .app-main 与窗口两种滚动容器。
+  const scrollers = [document.querySelector('.app-main'), document.scrollingElement].filter(Boolean)
+  const bottomed = scrollers.some(
+    (el) => el.scrollHeight > el.clientHeight && el.scrollHeight - el.scrollTop - el.clientHeight <= 4,
+  )
+  if (bottomed) {
+    currentSeq.value = items[items.length - 1].seq
+    return
+  }
   const bar = document.querySelector('.answer-bar')
   const barBottom = bar ? bar.getBoundingClientRect().bottom : 100
   // 基准线取阅读区（粘性栏下方）约 40% 处，贴合"正在看的题"，避免高线导致滞后
   const line = barBottom + (window.innerHeight - barBottom) * 0.4
-  let cur = exam.value.items[0].seq
-  for (const item of exam.value.items) {
+  let cur = items[0].seq
+  for (const item of items) {
     const el = document.getElementById(`q-${item.seq}`)
     if (!el) continue
     // 标题已越过基准线的最后一题 = 当前题
@@ -194,6 +205,13 @@ function renderContent(content, marked) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
+  // 排序题（grammar_order）：题干含空位标记 ＿＿ / ＿★＿，渲染成槽位，★ 处金色高亮
+  if (s.includes('＿★＿')) {
+    s = s
+      .replace(/＿★＿/g, '<span class="sort-slot sort-slot--star"><i>★</i></span>')
+      .replace(/＿＿/g, '<span class="sort-slot"></span>')
+    return s.replace(/\n/g, '<br/>')
+  }
   // 划线词若只是空格括号占位符（填空题的空），不加横线，避免给括号划线
   if (marked && String(marked).replace(/[（）()[\]\s　]/g, '')) {
     const esc = String(marked).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -700,6 +718,36 @@ onUnmounted(() => {
 .flag-btn { color: #909399; }
 .flag-btn.active { color: #e6a23c; font-weight: 600; }
 .q-content { font-size: 15px; line-height: 1.9; margin-bottom: 16px; word-break: break-word; }
+
+/* 排序题空位槽（grammar_order） */
+.q-content :deep(.sort-slot) {
+  display: inline-block;
+  position: relative;
+  min-width: 46px;
+  height: 1.25em;
+  margin: 0 3px;
+  /* 空 inline-block 以底边对齐文字基线，星标槽的 ★ 绝对定位后同为空盒 → 底线对齐 */
+  vertical-align: baseline;
+  border-bottom: 2px solid #c0c4cc;
+}
+.q-content :deep(.sort-slot--star) {
+  border-bottom-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  border-radius: 4px 4px 0 0;
+}
+.q-content :deep(.sort-slot--star i) {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 1px;
+  text-align: center;
+  font-size: 0.8em;
+  line-height: 1;
+  color: #d97706;
+  font-style: normal;
+  font-weight: 700;
+  pointer-events: none;
+}
 
 /* 选项：左对齐的块状行，圆圈顶部对齐首行，整行可点 */
 .q-options {
