@@ -256,6 +256,7 @@ onMounted(load)
 
 /* 完形题文章块 */
 .q-article {
+  font-family: "Yu Mincho", "YuMincho", "MS Mincho", "Hiragino Mincho ProN", "Songti SC", SimSun, serif;
   font-size: 15px;
   line-height: 1.9;
   margin-bottom: 14px;
