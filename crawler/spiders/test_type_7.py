@@ -42,7 +42,13 @@ class TestType7(Spider):
             return None
 
         meta = [x.strip() for x in html.xpath("//form//p//span//text()") if x.strip()]
-        date = next((m for m in meta if re.search(r"20\d\d", m)), "")
+        # 日期格式形如 2011-12-N1（2）；不能用宽松的 20\d\d，否则会误匹配问句里的「2010年」。
+        # 要求紧凑格式「20XX-XX...N级」，从后往前找（日期总在 meta 末尾）。
+        date = ""
+        for m in reversed(meta):
+            if re.search(r"20\d\d\s*[-/]\s*\d{1,2}.{0,4}N[1-5]", m):
+                date = m
+                break
         if not date:
             print("  ↷ 无年份，跳过不采集")
             return None

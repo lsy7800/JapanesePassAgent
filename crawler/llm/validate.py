@@ -428,6 +428,89 @@ def process_reading(item):
     }
 
 
+# ========== 中长篇阅读（一篇多问）校验 ==========
+# 结构为「一篇文章 + N 个问句」，整篇一次送审、带全文上下文；答案与选项沿用抓取原值，
+# 模型逐问补解析、难度、知识点。文章中的 【U】…【/U】 为下划线标记，请勿改动。
+
+def build_reading_passage_prompt(passage):
+    lines = []
+    for sub in passage["questions"]:
+        opts = sub["choice"]
+        labeled = "，".join(f"{_LETTERS[i]}. {opts[i]}" for i in range(len(opts)))
+        ans = normalize_answer(sub["answer"])
+        lines.append(f"问{sub['no']}：{sub['question']}\n  选项：{labeled}\n  正确答案：{ans}")
+    q_block = "\n".join(lines)
+
+    return f"""
+你是日语能力考试(JLPT)专家 + 语言校对专家。下面是一道「阅读理解」大题：
+一篇文章 + 多个问句，每个问句是一道四选一小题。请为每个问句撰写严谨的中文解析。
+
+严格要求：
+1. 答案与选项均为权威原值，绝对不要改动、不要重新排序、不要重新推导答案。
+2. 不要修改文章原文。文章中的「【U】…【/U】」是原文下划线标记，问句可能引用，请理解但不要改写。
+3. 为每个问句输出：analysis（中文解析）、difficulty（1-9 难度）、knowledge_points（考点/技巧数组）。
+4. analysis 必须严格采用以下结构排版：
+   【答案解析】...（结合原文说明为何该选项正确，可引用原文关键句）
+   【错项分析】a选项:...，b选项:...，c选项:...，d选项:...（逐项，不可合并）
+5. 输出必须为 JSON，questions 数组顺序与问号一致。
+
+输出 JSON 格式：
+{{
+  "level": "N1",
+  "questions": [
+    {{"no": 1, "answer": "c", "difficulty": "5", "knowledge_points": ["主旨理解"], "analysis": "【答案解析】...\\n【错项分析】a选项:...，b选项:...，c选项:...，d选项:..."}}
+  ]
+}}
+
+文章：
+{passage["article"]}
+
+问句与选项：
+{q_block}
+"""
+
+
+def process_reading_passage(passage):
+    """校验一篇多问阅读题。答案/选项/文章/问句取抓取原值；解析、难度、知识点取模型输出。"""
+    raw = call_deepseek(build_reading_passage_prompt(passage))
+    parsed = safe_parse(raw)
+    llm_by_no = {int(q.get("no")): q for q in parsed.get("questions", []) if q.get("no") is not None}
+
+    m = re.search(r"N[1-5]", passage.get("date", "") or "")
+    level = m.group(0) if m else (parsed.get("level") or "N1")
+
+    out_questions = []
+    for sub in passage["questions"]:
+        no = int(sub["no"])
+        opts = sub["choice"]
+        options = {_LETTERS[i]: (opts[i] if i < len(opts) else "") for i in range(4)}
+        answer = normalize_answer(sub["answer"])
+        lq = llm_by_no.get(no, {})
+        analysis = (lq.get("analysis") or "").strip()
+
+        assert answer in _LETTERS, f"问{no} 答案非法: {answer}"
+        assert all(options[l] for l in _LETTERS), f"问{no} 选项不全"
+        assert analysis, f"问{no} 解析为空"
+
+        out_questions.append({
+            "no": no,
+            "question": sub["question"],
+            "options": options,
+            "answer": answer,
+            "analysis": analysis,
+            "difficulty": str(lq.get("difficulty", "")).strip(),
+            "knowledge_points": lq.get("knowledge_points", []) or [],
+        })
+
+    return {
+        "id": passage.get("id"),
+        "date": passage.get("date", ""),
+        "level": level,
+        "article": passage["article"],
+        "questions": out_questions,
+    }
+
+
 if __name__ == "__main__":
     import argparse
     import os
@@ -444,9 +527,11 @@ if __name__ == "__main__":
                         help="文章语法（text_grammar）模式：输入为嵌套的文章完形题，逐篇校验")
     parser.add_argument("--reading", action="store_true",
                         help="阅读理解（reading_short）模式：一段短文 + 一问，逐题校验")
+    parser.add_argument("--reading-passage", dest="reading_passage", action="store_true",
+                        help="中长篇阅读模式：一篇文章 + 多问的嵌套结构，逐篇校验")
     args = parser.parse_args()
 
-    unit = "篇" if args.passage else "题"
+    unit = "篇" if (args.passage or args.reading_passage) else "题"
 
     with open(args.input, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -473,8 +558,14 @@ if __name__ == "__main__":
         qid = item.get("id")
         print(f"[{i}/{len(todo)}] 正在处理 ID: {qid}")
         try:
-            result = process_passage(item) if args.passage else (
-                process_reading(item) if args.reading else process_one(item, question_type=args.question_type))
+            if args.passage:
+                result = process_passage(item)
+            elif args.reading_passage:
+                result = process_reading_passage(item)
+            elif args.reading:
+                result = process_reading(item)
+            else:
+                result = process_one(item, question_type=args.question_type)
             result["id"] = qid
             validated_by_id[qid] = result
             success += 1
