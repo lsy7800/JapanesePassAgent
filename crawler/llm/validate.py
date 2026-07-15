@@ -1,5 +1,6 @@
 import requests
 import json
+import re
 import time
 import os
 
@@ -259,6 +260,103 @@ def process_one(question_data, question_type="type_1"):
     return parsed
 
 
+# ========== 文章语法（text_grammar / 文章完形）校验 ==========
+# 结构为「一篇文章 + N 道填空小题」，与扁平单题不同：整篇一次送审、带全文上下文，
+# 但答案与选项一律沿用抓取原值（不让模型重解，避免多空答案错位），
+# 模型只负责逐空补写标准格式解析、难度、知识点，以及整篇级别。
+
+_LETTERS = ["a", "b", "c", "d"]
+
+
+def build_passage_prompt(passage):
+    # 组织每道小题：题号 + 4 个选项（带 a-d 标签）+ 已知正确答案（字母）
+    lines = []
+    for sub in passage["questions"]:
+        opts = sub["options"]
+        labeled = "，".join(f"{_LETTERS[i]}. {opts[i]}" for i in range(len(opts)))
+        ans = normalize_answer(sub["answer"])
+        lines.append(f"空（{sub['no']}）选项：{labeled}；正确答案：{ans}")
+    blanks_block = "\n".join(lines)
+    ref = passage.get("analysis", "")
+
+    return f"""
+你是日语能力考试(JLPT)专家 + 语言校对专家。下面是一道「文章语法」（文章の文法）大题：
+一篇文章中有多个用 （数字） 标出的空，每个空是一道四选一小题。请为每个空撰写严谨的中文解析。
+
+严格要求：
+1. 答案与选项均为权威原值，绝对不要改动、不要重新排序、不要重新推导答案。
+2. 不要修改文章原文。
+3. 为每个空输出：analysis（中文解析）、difficulty（1-9 难度）、knowledge_points（语法/词汇点数组）。
+4. analysis 必须严格采用以下结构排版：
+   【答案解析】...（结合上下文说明为何该选项正确）
+   【错项分析】a选项:...，b选项:...，c选项:...，d选项:...（逐项，不可合并）
+5. 可参考下方“原始解析”理解出题意图，但需重写为上述统一格式与措辞。
+6. 输出必须为 JSON，questions 数组顺序与题号一致。
+
+输出 JSON 格式：
+{{
+  "level": "N1",
+  "questions": [
+    {{"no": 1, "answer": "c", "difficulty": "5", "knowledge_points": ["..."], "analysis": "【答案解析】...\\n【错项分析】a选项:...，b选项:...，c选项:...，d选项:..."}}
+  ]
+}}
+
+文章：
+{passage["article"]}
+
+各空选项与答案：
+{blanks_block}
+
+原始解析（供参考，请重写为统一格式）：
+{ref}
+"""
+
+
+def process_passage(passage):
+    """校验一篇文章完形题。返回嵌套结构：article + 逐空 options/answer/analysis/难度/知识点。
+
+    答案、选项取抓取原值；解析、难度、知识点取模型输出；级别优先从 date 提取。
+    """
+    raw = call_deepseek(build_passage_prompt(passage))
+    parsed = safe_parse(raw)
+    llm_by_no = {int(q.get("no")): q for q in parsed.get("questions", []) if q.get("no") is not None}
+
+    # 级别：优先从 date（如 "2011-07-N1"）提取，回退模型输出，再回退 N1
+    m = re.search(r"N[1-5]", passage.get("date", "") or "")
+    level = m.group(0) if m else (parsed.get("level") or "N1")
+
+    out_questions = []
+    for sub in passage["questions"]:
+        no = int(sub["no"])
+        opts = sub["options"]
+        options = {_LETTERS[i]: (opts[i] if i < len(opts) else "") for i in range(4)}
+        answer = normalize_answer(sub["answer"])
+        lq = llm_by_no.get(no, {})
+        analysis = (lq.get("analysis") or "").strip()
+
+        # 逐空质量校验：答案合法、四选项齐、解析非空
+        assert answer in _LETTERS, f"空{no} 答案非法: {answer}"
+        assert all(options[l] for l in _LETTERS), f"空{no} 选项不全"
+        assert analysis, f"空{no} 解析为空"
+
+        out_questions.append({
+            "no": no,
+            "options": options,
+            "answer": answer,
+            "analysis": analysis,
+            "difficulty": str(lq.get("difficulty", "")).strip(),
+            "knowledge_points": lq.get("knowledge_points", []) or [],
+        })
+
+    return {
+        "id": passage.get("id"),
+        "date": passage.get("date", ""),
+        "level": level,
+        "article": passage["article"],
+        "questions": out_questions,
+    }
+
+
 if __name__ == "__main__":
     import argparse
     import os
@@ -271,7 +369,11 @@ if __name__ == "__main__":
     parser.add_argument("--output", required=True, help="输出JSON文件路径")
     parser.add_argument("--fresh", action="store_true",
                         help="忽略已有输出，全部重新校验（默认断点续跑：跳过输出中已成功的题）")
+    parser.add_argument("--passage", action="store_true",
+                        help="文章语法（text_grammar）模式：输入为嵌套的文章完形题，逐篇校验")
     args = parser.parse_args()
+
+    unit = "篇" if args.passage else "题"
 
     with open(args.input, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -282,10 +384,10 @@ if __name__ == "__main__":
         with open(args.output, "r", encoding="utf-8") as f:
             for q in json.load(f):
                 validated_by_id[q.get("id")] = q
-        print(f"检测到已有输出，{len(validated_by_id)} 题已完成，仅补齐剩余题目")
+        print(f"检测到已有输出，{len(validated_by_id)} {unit}已完成，仅补齐剩余")
 
     todo = [item for item in data if item.get("id") not in validated_by_id]
-    print(f"待处理 {len(todo)} 题（共 {len(data)} 题）")
+    print(f"待处理 {len(todo)} {unit}（共 {len(data)} {unit}）")
 
     def _save():
         merged = sorted(validated_by_id.values(), key=lambda q: (q.get("id") is None, q.get("id")))
@@ -296,9 +398,9 @@ if __name__ == "__main__":
     failed = []
     for i, item in enumerate(todo, 1):
         qid = item.get("id")
-        print(f"[{i}/{len(todo)}] 正在处理题目 ID: {qid}")
+        print(f"[{i}/{len(todo)}] 正在处理 ID: {qid}")
         try:
-            result = process_one(item, question_type=args.question_type)
+            result = process_passage(item) if args.passage else process_one(item, question_type=args.question_type)
             result["id"] = qid
             validated_by_id[qid] = result
             success += 1
@@ -315,5 +417,5 @@ if __name__ == "__main__":
 
     _save()
     print(f"处理完成，已保存到 {args.output}")
-    print(f"本轮成功 {success} 题，失败 {len(failed)} 题" + (f"，失败题号: {failed}" if failed else ""))
-    print(f"输出累计 {len(validated_by_id)} 题（可再次运行同一命令补齐失败项）")
+    print(f"本轮成功 {success} {unit}，失败 {len(failed)} {unit}" + (f"，失败 ID: {failed}" if failed else ""))
+    print(f"输出累计 {len(validated_by_id)} {unit}（可再次运行同一命令补齐失败项）")
