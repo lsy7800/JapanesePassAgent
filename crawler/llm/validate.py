@@ -357,6 +357,77 @@ def process_passage(passage):
     }
 
 
+# ========== 阅读理解（reading_short / 短篇内容理解）校验 ==========
+# 结构为「一段短文 + 一个问句 + 4 整句选项」。答案与选项沿用抓取原值，
+# 模型只补解析、难度、知识点，级别优先从 date 提取。
+
+def build_reading_prompt(item):
+    opts = item["choice"]
+    labeled = "\n".join(f"{_LETTERS[i]}. {opts[i]}" for i in range(len(opts)))
+    ans = normalize_answer(item["answer"])
+    return f"""
+你是日语能力考试(JLPT)专家 + 语言校对专家。下面是一道「阅读理解」（内容理解·短篇）题：
+一段短文 + 一个问句 + 四个选项。请撰写严谨的中文解析。
+
+严格要求：
+1. 答案与选项均为权威原值，绝对不要改动、不要重新排序、不要重新推导答案。
+2. 不要修改文章原文与问句。
+3. analysis 必须严格采用以下结构排版：
+   【答案解析】...（结合原文说明为何该选项正确，可引用原文关键句）
+   【错项分析】a选项:...，b选项:...，c选项:...，d选项:...（逐项，不可合并）
+4. 输出为 JSON：analysis（中文解析）、difficulty（1-9 难度）、knowledge_points（考点/技巧数组，如“主旨理解”“指示词指代”“筆者の主張”）。
+
+输出 JSON 格式：
+{{
+  "answer": "{ans}",
+  "difficulty": "5",
+  "knowledge_points": ["主旨理解", "..."],
+  "analysis": "【答案解析】...\\n【错项分析】a选项:...，b选项:...，c选项:...，d选项:..."
+}}
+
+文章：
+{item["article"]}
+
+问句：{item["question"]}
+
+选项：
+{labeled}
+
+正确答案：{ans}
+"""
+
+
+def process_reading(item):
+    """校验一道阅读理解题。答案/选项/文章/问句取抓取原值；解析、难度、知识点取模型输出。"""
+    raw = call_deepseek(build_reading_prompt(item))
+    parsed = safe_parse(raw)
+
+    opts = item["choice"]
+    options = {_LETTERS[i]: (opts[i] if i < len(opts) else "") for i in range(4)}
+    answer = normalize_answer(item["answer"])
+    analysis = (parsed.get("analysis") or "").strip()
+
+    assert answer in _LETTERS, f"答案非法: {answer}"
+    assert all(options[l] for l in _LETTERS), "选项不全"
+    assert analysis, "解析为空"
+
+    m = re.search(r"N[1-5]", item.get("date", "") or "")
+    level = m.group(0) if m else "N1"
+
+    return {
+        "id": item.get("id"),
+        "date": item.get("date", ""),
+        "level": level,
+        "article": item["article"],
+        "question": item["question"],
+        "options": options,
+        "answer": answer,
+        "analysis": analysis,
+        "difficulty": str(parsed.get("difficulty", "")).strip(),
+        "knowledge_points": parsed.get("knowledge_points", []) or [],
+    }
+
+
 if __name__ == "__main__":
     import argparse
     import os
@@ -371,6 +442,8 @@ if __name__ == "__main__":
                         help="忽略已有输出，全部重新校验（默认断点续跑：跳过输出中已成功的题）")
     parser.add_argument("--passage", action="store_true",
                         help="文章语法（text_grammar）模式：输入为嵌套的文章完形题，逐篇校验")
+    parser.add_argument("--reading", action="store_true",
+                        help="阅读理解（reading_short）模式：一段短文 + 一问，逐题校验")
     args = parser.parse_args()
 
     unit = "篇" if args.passage else "题"
@@ -400,7 +473,8 @@ if __name__ == "__main__":
         qid = item.get("id")
         print(f"[{i}/{len(todo)}] 正在处理 ID: {qid}")
         try:
-            result = process_passage(item) if args.passage else process_one(item, question_type=args.question_type)
+            result = process_passage(item) if args.passage else (
+                process_reading(item) if args.reading else process_one(item, question_type=args.question_type))
             result["id"] = qid
             validated_by_id[qid] = result
             success += 1
