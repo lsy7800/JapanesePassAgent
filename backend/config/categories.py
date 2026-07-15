@@ -40,8 +40,8 @@ CATEGORIES = [
     {"code": "grammar_order",  "name": "句子语法2（句子组织）",     "name_ja": "文の文法2（文の組み立て）",   "section": SECTION_GRAMMAR, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": True},
     {"code": "text_grammar",   "name": "文章语法",                 "name_ja": "文章の文法",                 "section": SECTION_GRAMMAR, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": True},
 
-    # ── 阅读（需文章，暂不支持出题） ──
-    {"code": "reading_short",  "name": "内容理解（短篇）", "name_ja": "内容理解（短文）", "section": SECTION_READING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": False},
+    # ── 阅读 ──
+    {"code": "reading_short",  "name": "内容理解（短篇）", "name_ja": "内容理解（短文）", "section": SECTION_READING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": True},
     {"code": "reading_mid",    "name": "内容理解（中篇）", "name_ja": "内容理解（中文）", "section": SECTION_READING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": False},
     {"code": "reading_long",   "name": "内容理解（长篇）", "name_ja": "内容理解（長文）", "section": SECTION_READING, "levels": ["N1", "N3"],                   "examable": False},
     {"code": "reading_integ",  "name": "综合理解",         "name_ja": "統合理解",         "section": SECTION_READING, "levels": ["N1", "N2"],                   "examable": False},

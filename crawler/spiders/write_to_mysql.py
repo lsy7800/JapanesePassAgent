@@ -128,16 +128,17 @@ def _insert_single_choice(cursor, item, source, category=None):
         cursor.execute(INSERT_OPTION_SQL, (question_id, label, options.get(label, "")))
 
 
-def _insert_cloze(cursor, passage, source, category):
-    """将一篇文章完形题写入三表（1 题组 + article + N 子题，每子题 4 选项）。
+def _insert_passage(cursor, passage, source, category, group_type):
+    """通用「一篇文章 + N 子题」入库（1 题组 + article + N 子题，每子题 4 选项）。
 
-    难度/知识点是组级字段：难度取各空均值（取整），知识点取各空并集去重。
-    子题 content 留空（题干在文章里），marked 留空。
+    覆盖 cloze（完形，N 个空、子题 content 空）与 reading（阅读，N 个问句、子题 content=问句）。
+    N=1 即短篇一问，N≥2 即中长篇多问，同一路径无需改动。
+    难度/知识点为组级：难度取各子题均值（取整），知识点取各子题并集去重。
+    子题 content 取 question 字段（完形无该字段 → 空），答案/解析逐子题写入。
     """
     source_ref = f"{source}#{passage.get('id')}"
     questions = passage.get("questions", [])
 
-    # 组级难度 = 各空难度均值（忽略 0/缺失）；知识点 = 各空并集去重（保序）
     diffs = [_parse_difficulty(q.get("difficulty")) for q in questions]
     diffs = [d for d in diffs if d > 0]
     group_diff = round(sum(diffs) / len(diffs)) if diffs else 0
@@ -149,9 +150,9 @@ def _insert_cloze(cursor, passage, source, category):
     knowledge_points = json.dumps(kps, ensure_ascii=False)
 
     cursor.execute(INSERT_GROUP_SQL, (
-        "cloze",
+        group_type,
         category,
-        passage.get("article"),  # 完形题存文章
+        passage.get("article"),
         passage.get("level", ""),
         passage.get("date", ""),
         group_diff,
@@ -164,9 +165,9 @@ def _insert_cloze(cursor, passage, source, category):
     for i, q in enumerate(questions, 1):
         cursor.execute(INSERT_QUESTION_SQL, (
             group_id,
-            q.get("no", i),   # 子题顺序号 = 空号
-            "",               # content 留空（题干在文章里）
-            "",               # marked 留空
+            q.get("no", i),               # 子题顺序号
+            q.get("question", ""),        # content：阅读=问句；完形无此字段 → 空
+            "",                           # marked 留空
             q.get("answer", ""),
             q.get("analysis", ""),
         ))
@@ -216,11 +217,11 @@ def write_to_mysql(json_path, source=None, category=None):
         conn.close()
 
 
-def write_passage_to_mysql(json_path, source=None, category="text_grammar"):
-    """将校验后的文章完形题（嵌套结构）批量写入三表。
+def _write_passages(json_path, source, category, group_type, normalize=None):
+    """通用「一篇 N 问」批量入库（cloze / reading 共用），按 source 幂等替换。
 
-    与 write_to_mysql 相同的幂等策略（按 source 整批替换）。每篇文章 = 1 个 cloze 题组 +
-    N 个子题；category 默认 text_grammar。
+    normalize: 可选，把一条原始记录转成 {article, questions:[...]} 结构（短篇阅读用，
+    因其校验产物是扁平一问）；None 表示记录本身已是嵌套结构（完形）。
     """
     full_path = _resolve_data_path(json_path)
     if source is None:
@@ -239,18 +240,51 @@ def write_passage_to_mysql(json_path, source=None, category="text_grammar"):
 
         groups = 0
         subs = 0
-        for passage in data:
+        for rec in data:
+            passage = normalize(rec) if normalize else rec
             try:
-                _insert_cloze(cursor, passage, source, category)
+                _insert_passage(cursor, passage, source, category, group_type)
                 groups += 1
                 subs += len(passage.get("questions", []))
             except Exception as e:
                 print(f"写入失败 篇 ID: {passage.get('id')}, 错误: {e}")
 
         conn.commit()
-        print(f"写入完成: {groups}/{len(data)} 篇，共 {subs} 小题（source={source}, category={category}）")
+        print(f"写入完成: {groups}/{len(data)} 篇，共 {subs} 小题（source={source}, category={category}, type={group_type}）")
     finally:
         conn.close()
+
+
+def write_passage_to_mysql(json_path, source=None, category="text_grammar"):
+    """文章完形（cloze）批量入库。每篇文章 = 1 个 cloze 题组 + N 子题。"""
+    _write_passages(json_path, source, category, "cloze")
+
+
+def _reading_to_passage(rec):
+    """短篇阅读校验产物（扁平一问）→ 通用「一篇 N 问」结构（N=1）。
+
+    中长篇阅读若产出 {article, questions:[...]} 嵌套结构，可直接走 _write_passages 无需此转换。
+    """
+    return {
+        "id": rec.get("id"),
+        "article": rec.get("article", ""),
+        "level": rec.get("level", ""),
+        "date": rec.get("date", ""),
+        "questions": [{
+            "no": 1,
+            "question": rec.get("question", ""),
+            "options": rec.get("options", {}),
+            "answer": rec.get("answer", ""),
+            "analysis": rec.get("analysis", ""),
+            "difficulty": rec.get("difficulty", ""),
+            "knowledge_points": rec.get("knowledge_points", []),
+        }],
+    }
+
+
+def write_reading_to_mysql(json_path, source=None, category="reading_short"):
+    """阅读理解批量入库。短篇（扁平一问）自动转 N=1；中长篇若已是嵌套结构，改传 normalize=None。"""
+    _write_passages(json_path, source, category, "reading", normalize=_reading_to_passage)
 
 
 if __name__ == "__main__":
