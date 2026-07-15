@@ -46,8 +46,13 @@ def persist_exam(cur, *, level: str | None, group_ids: list[int], time_limit: in
 def _select_group_ids(
     cur, *, level: str | None, category: str | None,
     difficulty_min: int | None, difficulty_max: int | None, count: int,
+    exam_date: str | None = None,
 ) -> list[int]:
-    """从题库单池随机抽 count 个题组 id（库存不足则返回实际数量）。"""
+    """从题库单池随机抽 count 个题组 id（库存不足则返回实际数量）。
+
+    exam_date：按年月前缀匹配（如 "2010-07"），用于按整场考试组卷；exam_date 字段前 7 位
+    统一为 YYYY-MM，故用前缀匹配即可跨 "2010-07" / "2010-07-N1（1）" 等格式。
+    """
     where, params = [], []
     if level:
         where.append("level = %s")
@@ -61,6 +66,9 @@ def _select_group_ids(
     if difficulty_max is not None:
         where.append("difficulty <= %s")
         params.append(difficulty_max)
+    if exam_date:
+        where.append("exam_date LIKE %s")
+        params.append(f"{exam_date}%")
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     cur.execute(
         f"SELECT id FROM question_groups {where_sql} ORDER BY RAND() LIMIT %s",
@@ -76,24 +84,29 @@ def build_exam(
     difficulty_max: int | None = None,
     time_limit: int = 0,
     user_id: int | None = None,
+    exam_date: str | None = None,
+    unlimited: bool = False,
 ) -> dict:
     """按题型配额抽题并落库。
 
     plans: [(category|None, count), ...]，按顺序逐段抽题，题型间保持顺序、段内随机。
+    exam_date: 按年月前缀（如 "2010-07"）筛选整场考试题目，可与题型/难度叠加。
+    unlimited: 整场组卷模式，绕过单段 MAX_PER_PLAN 上限（该场有多少题组就抽多少）。
     返回 {exam_id, total, shortfalls}；无题可抽时 exam_id 为 None。
     """
     ordered_ids: list[int] = []
     shortfalls: list[str] = []
     for cat, cnt in plans:
-        cnt = max(0, min(int(cnt), MAX_PER_PLAN))
+        cnt = max(0, int(cnt)) if unlimited else max(0, min(int(cnt), MAX_PER_PLAN))
         if not cnt:
             continue
         got = _select_group_ids(
             cur, level=level, category=cat,
             difficulty_min=difficulty_min, difficulty_max=difficulty_max, count=cnt,
+            exam_date=exam_date,
         )
         ordered_ids.extend(got)
-        if len(got) < cnt:
+        if len(got) < cnt and not unlimited:
             label = category_name(cat) if cat else "全部题型"
             shortfalls.append(f"{label}：需 {cnt} 题，实际 {len(got)} 题")
 

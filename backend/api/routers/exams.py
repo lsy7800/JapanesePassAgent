@@ -171,9 +171,13 @@ def smart_generate(
 
     plan = plan_exam(payload.requirement, weak[:8], payload.level, available)
 
+    whole_exam = plan.get("whole_exam", False)
     quotas = plan.get("category_quotas")
     if quotas:
         plans = [(code, cnt) for code, cnt in quotas.items()]
+    elif whole_exam:
+        # 整场组卷：单池不限量，靠 exam_date 筛出该场全部题组
+        plans = [(None, plan["total_questions"])]
     else:
         plans = [(None, plan["total_questions"])]
 
@@ -187,6 +191,8 @@ def smart_generate(
                 difficulty_max=plan.get("difficulty_max"),
                 time_limit=payload.time_limit_minutes,
                 user_id=uid,
+                exam_date=plan.get("exam_date"),
+                unlimited=whole_exam,
             )
             if not result["exam_id"]:
                 raise HTTPException(status_code=422, detail="没有符合条件的题目，请调整需求后再试")
