@@ -43,7 +43,7 @@ CATEGORIES = [
     # ── 阅读 ──
     {"code": "reading_short",  "name": "内容理解（短篇）", "name_ja": "内容理解（短文）", "section": SECTION_READING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": True},
     {"code": "reading_mid",    "name": "内容理解（中篇）", "name_ja": "内容理解（中文）", "section": SECTION_READING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": True},
-    {"code": "reading_long",   "name": "内容理解（长篇）", "name_ja": "内容理解（長文）", "section": SECTION_READING, "levels": ["N1", "N3"],                   "examable": False},
+    {"code": "reading_long",   "name": "内容理解（长篇）", "name_ja": "内容理解（長文）", "section": SECTION_READING, "levels": ["N1", "N3"],                   "examable": True},
     {"code": "reading_integ",  "name": "综合理解",         "name_ja": "統合理解",         "section": SECTION_READING, "levels": ["N1", "N2"],                   "examable": False},
     {"code": "reading_thesis", "name": "论点理解（长篇）", "name_ja": "主張理解（長文）", "section": SECTION_READING, "levels": ["N1", "N2"],                   "examable": False},
     {"code": "info_search",    "name": "信息检索",         "name_ja": "情報検索",         "section": SECTION_READING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": False},
@@ -81,3 +81,13 @@ def category_name(code: str | None) -> str:
         return ""
     c = CATEGORY_MAP.get(code)
     return c["name"] if c else code
+
+
+# code -> 在 CATEGORIES 中的序号，即 JLPT 标准题型顺序（文字词汇→语法→阅读→听力）
+_CATEGORY_ORDER = {c["code"]: i for i, c in enumerate(CATEGORIES)}
+
+
+def category_order(code: str | None) -> int:
+    """题型的标准排序权重（越小越靠前）。未知题型排到最后。"""
+    return _CATEGORY_ORDER.get(code, len(CATEGORIES))
+

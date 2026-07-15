@@ -68,6 +68,30 @@ def test_whole_exam_pulls_all_of_that_date(client, make_user, seed_dated_bank, m
     assert len(body["items"]) == 8
 
 
+def test_whole_exam_standard_order(client, make_user, seed_dated_bank, db, monkeypatch):
+    """整场卷按标准题型顺序排列：文字词汇（context）在语法（grammar_form）之前。"""
+    from backend.config.categories import category_order
+    u = make_user()
+    _patch_plan(monkeypatch, _whole_plan())
+    r = client.post(
+        "/api/v1/exams/smart-generate",
+        json={"requirement": "2010年7月整套", "level": "N1"},
+        headers=u["headers"],
+    )
+    items = r.json()["items"]
+    assert len(items) == 8
+    # 卡片顺序 → 各 group 的 category → 标准题型权重，应单调不减（context 在 grammar_form 之前）
+    gids = [it["group_id"] for it in items]
+    with db.cursor() as cur:
+        placeholders = ", ".join(["%s"] * len(gids))
+        cur.execute(
+            f"SELECT id, category FROM question_groups WHERE id IN ({placeholders})", gids
+        )
+        cat_by_id = {row["id"]: row["category"] for row in cur.fetchall()}
+    order_weights = [category_order(cat_by_id[g]) for g in gids]
+    assert order_weights == sorted(order_weights)  # 题型权重单调不减 = 标准顺序
+
+
 def test_whole_exam_excludes_other_dates(client, make_user, seed_dated_bank, monkeypatch):
     """整场组卷只含指定年月：2013-12 的题不混进 2010-07 的卷。"""
     u = make_user()
