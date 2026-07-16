@@ -448,6 +448,8 @@ def build_reading_passage_prompt(passage):
 严格要求：
 1. 答案与选项均为权威原值，绝对不要改动、不要重新排序、不要重新推导答案。
 2. 不要修改文章原文。文章中的「【U】…【/U】」是原文下划线标记，问句可能引用，请理解但不要改写。
+   若文章含「【文章A】」「【文章B】」标记，说明这是「综合理解」题：两篇文章 A、B 就同一话题
+   各自表述，问句多为对比设问（如 AとB 的共通点/差异），解析时请分别对照 A、B 的原文作答。
 3. 为每个问句输出：analysis（中文解析）、difficulty（1-9 难度）、knowledge_points（考点/技巧数组）。
 4. analysis 必须严格采用以下结构排版：
    【答案解析】...（结合原文说明为何该选项正确，可引用原文关键句）
@@ -511,6 +513,130 @@ def process_reading_passage(passage):
     }
 
 
+# ========== 阅读理解审核模式（--audit）==========
+# 与上面的「校验」不同：校验默认答案权威、只补解析；审核则不信任录入，要求模型独立复核。
+# 用于排查历史录入错误——问句是否张冠李戴、录入答案是否正确、有无错别字。
+# 关键：审核只「报告」不「改写」。原文/问句/选项/录入答案一律原样保留，模型的独立判断
+# 与差异写进附加字段，最终由人工据 need_review 清单定夺，绝不自动改题库。
+
+def build_audit_prompt(passage):
+    lines = []
+    for sub in passage["questions"]:
+        opts = sub["choice"]
+        labeled = "，".join(f"{_LETTERS[i]}. {opts[i]}" for i in range(len(opts)))
+        recorded = normalize_answer(sub["answer"])
+        lines.append(
+            f"问{sub['no']}：{sub['question']}\n  选项：{labeled}\n  录入答案（待你核对，勿盲信）：{recorded}"
+        )
+    q_block = "\n".join(lines)
+
+    return f"""
+你是日语能力考试(JLPT)阅读题的资深审校专家。下面是一篇文章 + 多个四选一问句。
+这批题目是人工历史录入的，**可能存在录入错误**。请你独立、严格地审核，不要预设录入是对的。
+
+对每个问句，请完成三项审核：
+1. 【问句相关性】判断该问句是否确实针对本篇文章（问句问的内容能在文章中找到依据）。
+   若问句与文章明显无关、或像是别的文章的题被错误录入到这里，判为不相关。
+2. 【独立作答】你**自己**通读文章后独立选出正确答案（a/b/c/d），不要因为看到「录入答案」就附和它。
+   先独立判断，再与录入答案比较。
+3. 【文本问题】指出问句或选项中的错别字、乱码、明显 OCR 错误（如「卜」应为「ト」、「亊」应为「事」等）。
+
+严格要求：
+- 绝对不要改写文章、问句、选项或录入答案的内容，你只做判断与报告。
+- 文章中「【U】…【/U】」是原文下划线标记，「【文章A】【文章B】」是综合理解的两篇分栏标记，理解即可，勿改写。
+- 逐题输出，questions 数组顺序与问号一致。
+
+输出必须为 JSON：
+{{
+  "level": "N1",
+  "questions": [
+    {{
+      "no": 1,
+      "question_relevant": true,
+      "relevance_note": "",
+      "model_answer": "c",
+      "recorded_answer": "c",
+      "answer_agrees": true,
+      "answer_confidence": "high",
+      "text_issues": [],
+      "audit_comment": "",
+      "analysis": "【答案解析】...\\n【错项分析】a选项:...，b选项:...，c选项:...，d选项:..."
+    }}
+  ]
+}}
+
+文章：
+{passage["article"]}
+
+问句与选项：
+{q_block}
+"""
+
+
+def process_audit(passage):
+    """审核一篇多问阅读题：独立复核答案、问句相关性、文本错误，只报告不改写。
+
+    产出在保真原值（question/choice/answer 均取抓取原值）基础上，附加审核字段；
+    并汇总 need_review：任一子题「问句不相关 / 答案不一致 / 有文本问题」即标记，供人工排查。
+    """
+    raw = call_deepseek(build_audit_prompt(passage))
+    parsed = safe_parse(raw)
+    llm_by_no = {int(q.get("no")): q for q in parsed.get("questions", []) if q.get("no") is not None}
+
+    m = re.search(r"N[1-5]", passage.get("date", "") or "")
+    level = m.group(0) if m else (parsed.get("level") or "N1")
+
+    out_questions = []
+    review_flags = []
+    for sub in passage["questions"]:
+        no = int(sub["no"])
+        opts = sub["choice"]
+        options = {_LETTERS[i]: (opts[i] if i < len(opts) else "") for i in range(4)}
+        recorded = normalize_answer(sub["answer"])
+        lq = llm_by_no.get(no, {})
+
+        model_answer = normalize_answer(lq.get("model_answer", "") or "")
+        relevant = lq.get("question_relevant", True)
+        text_issues = lq.get("text_issues", []) or []
+        # 以代码为准计算一致性，不依赖模型自评的 answer_agrees（模型偶尔前后矛盾）
+        answer_agrees = bool(model_answer) and model_answer == recorded
+
+        reasons = []
+        if relevant is False:
+            reasons.append("问句疑与文章不符")
+        if model_answer and not answer_agrees:
+            reasons.append(f"答案存疑(录入{recorded}/模型{model_answer})")
+        if text_issues:
+            reasons.append("文本疑有错")
+        if reasons:
+            review_flags.append(f"问{no}: " + "；".join(reasons))
+
+        out_questions.append({
+            "no": no,
+            "question": sub["question"],
+            "options": options,
+            "answer": recorded,                 # 保真：录入答案原样保留，不被模型改动
+            "model_answer": model_answer,
+            "answer_agrees": answer_agrees,
+            "answer_confidence": str(lq.get("answer_confidence", "")).strip(),
+            "question_relevant": relevant,
+            "relevance_note": (lq.get("relevance_note") or "").strip(),
+            "text_issues": text_issues,
+            "audit_comment": (lq.get("audit_comment") or "").strip(),
+            "analysis": (lq.get("analysis") or "").strip(),
+        })
+
+    return {
+        "id": passage.get("id"),
+        "date": passage.get("date", ""),
+        "level": level,
+        "article": passage["article"],
+        "need_review": bool(review_flags),
+        "review_flags": review_flags,
+        "questions": out_questions,
+    }
+
+
 if __name__ == "__main__":
     import argparse
     import os
@@ -529,9 +655,11 @@ if __name__ == "__main__":
                         help="阅读理解（reading_short）模式：一段短文 + 一问，逐题校验")
     parser.add_argument("--reading-passage", dest="reading_passage", action="store_true",
                         help="中长篇阅读模式：一篇文章 + 多问的嵌套结构，逐篇校验")
+    parser.add_argument("--audit", action="store_true",
+                        help="审核模式：不信任录入，独立复核答案+检查问句相关性+找错别字，只报告不改写（嵌套阅读结构）")
     args = parser.parse_args()
 
-    unit = "篇" if (args.passage or args.reading_passage) else "题"
+    unit = "篇" if (args.passage or args.reading_passage or args.audit) else "题"
 
     with open(args.input, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -562,6 +690,8 @@ if __name__ == "__main__":
                 result = process_passage(item)
             elif args.reading_passage:
                 result = process_reading_passage(item)
+            elif args.audit:
+                result = process_audit(item)
             elif args.reading:
                 result = process_reading(item)
             else:
