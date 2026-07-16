@@ -44,7 +44,7 @@ CATEGORIES = [
     {"code": "reading_short",  "name": "内容理解（短篇）", "name_ja": "内容理解（短文）", "section": SECTION_READING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": True},
     {"code": "reading_mid",    "name": "内容理解（中篇）", "name_ja": "内容理解（中文）", "section": SECTION_READING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": True},
     {"code": "reading_long",   "name": "内容理解（长篇）", "name_ja": "内容理解（長文）", "section": SECTION_READING, "levels": ["N1", "N3"],                   "examable": True},
-    {"code": "reading_integ",  "name": "综合理解",         "name_ja": "統合理解",         "section": SECTION_READING, "levels": ["N1", "N2"],                   "examable": False},
+    {"code": "reading_integ",  "name": "综合理解",         "name_ja": "統合理解",         "section": SECTION_READING, "levels": ["N1", "N2"],                   "examable": True},
     {"code": "reading_thesis", "name": "论点理解（长篇）", "name_ja": "主張理解（長文）", "section": SECTION_READING, "levels": ["N1", "N2"],                   "examable": False},
     {"code": "info_search",    "name": "信息检索",         "name_ja": "情報検索",         "section": SECTION_READING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": False},
 
