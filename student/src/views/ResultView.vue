@@ -40,6 +40,18 @@ function renderContent(content, marked) {
 }
 
 // 渲染文章（完形/阅读）：转义 + 高亮空号 （1）… + 下划线标记 【U】…【/U】+ 保留换行
+// 把 Markdown 表格文本转成 HTML <table>
+function _mdTableToHtml(block) {
+  const lines = block.trim().split('\n')
+  if (lines.length < 2) return block
+  const parseRow = (line) => line.replace(/^\||\|$/g, '').split('|').map(c => c.trim())
+  const header = parseRow(lines[0])
+  const rows = lines.slice(2).map(parseRow)
+  const ths = header.map(h => `<th>${h}</th>`).join('')
+  const trs = rows.map(r => '<tr>' + r.map(c => `<td>${c}</td>`).join('') + '</tr>').join('')
+  return `<table class="info-table"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`
+}
+
 function renderArticle(article) {
   if (article == null) return ''
   let s = String(article)
@@ -48,6 +60,15 @@ function renderArticle(article) {
     .replace(/>/g, '&gt;')
   s = s.replace(/（\d+[a-zA-Z]?）/g, (m) => `<span class="cloze-blank">${m}</span>`)
   s = s.replace(/【U】([\s\S]*?)【\/U】/g, (_m, inner) => `<u class="reading-underline">${inner}</u>`)
+  s = s.replace(/【文章A】/g, '<div class="article-label">文章A</div>')
+  s = s.replace(/【文章B】/g, '<div class="article-label">文章B</div>')
+  s = s.replace(/【BOX】\n?([\s\S]*?)\n?【\/BOX】/g, (_m, inner) => {
+    return `<div class="info-box">${inner.replace(/\n/g, '<br/>')}</div>`
+  })
+  s = s.replace(/((?:\|[^\n]+\|\n?){2,})/g, (block) => {
+    if (!block.includes('---')) return block
+    return _mdTableToHtml(block)
+  })
   return s.replace(/\n/g, '<br/>')
 }
 
@@ -289,6 +310,36 @@ onMounted(load)
   text-decoration: underline;
   text-decoration-thickness: 2px;
   text-underline-offset: 3px;
+}
+/* 信息检索：Markdown 表格 */
+.q-article :deep(.info-table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 14px;
+}
+.q-article :deep(.info-table th),
+.q-article :deep(.info-table td) {
+  border: 1px solid #d1d5db;
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.q-article :deep(.info-table thead th) {
+  background: #f3f4f6;
+  font-weight: 600;
+}
+.q-article :deep(.info-table tbody tr:nth-child(even)) {
+  background: #fafafa;
+}
+/* 信息检索：边框信息块 */
+.q-article :deep(.info-box) {
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  padding: 10px 14px;
+  margin: 8px 0;
+  background: #fff;
+  line-height: 1.8;
 }
 /* 子题块：完形题一卡多子题，用虚线分隔 */
 .sub-q + .sub-q { margin-top: 14px; padding-top: 14px; border-top: 1px dashed #ebeef5; }
