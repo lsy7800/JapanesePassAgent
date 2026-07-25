@@ -46,7 +46,7 @@ CATEGORIES = [
     {"code": "reading_long",   "name": "内容理解（长篇）", "name_ja": "内容理解（長文）", "section": SECTION_READING, "levels": ["N1", "N3"],                   "examable": True},
     {"code": "reading_integ",  "name": "综合理解",         "name_ja": "統合理解",         "section": SECTION_READING, "levels": ["N1", "N2"],                   "examable": True},
     {"code": "reading_thesis", "name": "论点理解（长篇）", "name_ja": "主張理解（長文）", "section": SECTION_READING, "levels": ["N1", "N2"],                   "examable": False},
-    {"code": "info_search",    "name": "信息检索",         "name_ja": "情報検索",         "section": SECTION_READING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": False},
+    {"code": "info_search",    "name": "信息检索",         "name_ja": "情報検索",         "section": SECTION_READING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": True},
 
     # ── 听力（需音频，暂不支持出题，学生端隐藏） ──
     {"code": "task_listening", "name": "问题理解", "name_ja": "課題理解",   "section": SECTION_LISTENING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": False},
