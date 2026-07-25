@@ -283,8 +283,23 @@ def _reading_to_passage(rec):
 
 
 def write_reading_to_mysql(json_path, source=None, category="reading_short"):
-    """阅读理解批量入库。短篇（扁平一问）自动转 N=1；中长篇若已是嵌套结构，改传 normalize=None。"""
-    _write_passages(json_path, source, category, "reading", normalize=_reading_to_passage)
+    """阅读理解批量入库。
+
+    自动检测格式：
+    - 嵌套结构（含 questions 列表）→ 直接入库（中长篇/信息检索）
+    - 扁平结构（单问）→ _reading_to_passage 转成 N=1 再入库（短篇）
+    """
+    import json as _json
+    full_path = _resolve_data_path(json_path)
+    with open(full_path, "r", encoding="utf-8") as f:
+        sample = _json.load(f)
+    # 取第一条判断格式
+    first = sample[0] if sample else {}
+    if isinstance(first.get("questions"), list):
+        normalize = None
+    else:
+        normalize = _reading_to_passage
+    _write_passages(json_path, source, category, "reading", normalize=normalize)
 
 
 if __name__ == "__main__":
