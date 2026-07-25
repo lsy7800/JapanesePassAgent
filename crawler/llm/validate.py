@@ -519,10 +519,17 @@ def process_reading_passage(passage):
 # 关键：审核只「报告」不「改写」。原文/问句/选项/录入答案一律原样保留，模型的独立判断
 # 与差异写进附加字段，最终由人工据 need_review 清单定夺，绝不自动改题库。
 
+def _sub_opts_list(sub):
+    """从子题中提取选项列表，兼容 choice(list) 和 options(dict) 两种格式。"""
+    if "options" in sub and isinstance(sub["options"], dict):
+        return [sub["options"].get(l, "") for l in _LETTERS]
+    return sub.get("choice", [])
+
+
 def build_audit_prompt(passage):
     lines = []
     for sub in passage["questions"]:
-        opts = sub["choice"]
+        opts = _sub_opts_list(sub)
         labeled = "，".join(f"{_LETTERS[i]}. {opts[i]}" for i in range(len(opts)))
         recorded = normalize_answer(sub["answer"])
         lines.append(
@@ -590,7 +597,7 @@ def process_audit(passage):
     review_flags = []
     for sub in passage["questions"]:
         no = int(sub["no"])
-        opts = sub["choice"]
+        opts = _sub_opts_list(sub)
         options = {_LETTERS[i]: (opts[i] if i < len(opts) else "") for i in range(4)}
         recorded = normalize_answer(sub["answer"])
         lq = llm_by_no.get(no, {})
