@@ -223,47 +223,41 @@ function renderContent(content, marked) {
   return s.replace(/\n/g, '<br/>')
 }
 
-// 把 Markdown 表格文本转成 HTML <table>
-function _mdTableToHtml(block) {
-  const lines = block.trim().split('\n')
-  if (lines.length < 2) return block
-  const parseRow = (line) => line.replace(/^\||\|$/g, '').split('|').map(c => c.trim())
-  const header = parseRow(lines[0])
-  // lines[1] 是分隔行 (--- | ---)，从 lines[2] 开始是数据行
-  const rows = lines.slice(2).map(parseRow)
-  const ths = header.map(h => `<th>${h}</th>`).join('')
-  const trs = rows.map(r => '<tr>' + r.map(c => `<td>${c}</td>`).join('') + '</tr>').join('')
-  return `<table class="info-table"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`
-}
-
-// 渲染文章（完形/阅读）：转义 + 高亮空号 + 下划线 + 【BOX】块 + Markdown 表格 + 保留换行
+// 渲染文章（完形/阅读）：保护 HTML 块 → 转义纯文本 → 还原 HTML 块 → 处理标记
 function renderArticle(article) {
   if (article == null) return ''
   let s = String(article)
+
+  // 1. 提取并保护已有 HTML 块（info_search 里的 <table>），避免被转义
+  const htmlBlocks = []
+  s = s.replace(/<table[\s\S]*?<\/table>/gi, (m) => {
+    htmlBlocks.push(m)
+    return `\x00HTML${htmlBlocks.length - 1}\x00`
+  })
+
+  // 2. 转义纯文本部分
+  s = s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
 
-  // 完形空格高亮
+  // 3. 完形空格高亮
   s = s.replace(/（\d+[a-zA-Z]?）/g, (m) => `<span class="cloze-blank">${m}</span>`)
 
-  // 下划线标记
+  // 4. 下划线标记
   s = s.replace(/【U】([\s\S]*?)【\/U】/g, (_m, inner) => `<u class="reading-underline">${inner}</u>`)
 
-  // 综合理解双篇标题
+  // 5. 综合理解双篇标题
   s = s.replace(/【文章A】/g, '<div class="article-label">文章A</div>')
   s = s.replace(/【文章B】/g, '<div class="article-label">文章B</div>')
 
-  // 【BOX】块：用边框包裹，内部换行转 <br>
+  // 6. 【BOX】块：边框包裹，内部换行转 <br>
   s = s.replace(/【BOX】\n?([\s\S]*?)\n?【\/BOX】/g, (_m, inner) => {
     return `<div class="info-box">${inner.replace(/\n/g, '<br/>')}</div>`
   })
 
-  // Markdown 表格：匹配以 | 开头的连续行（含分隔行）
-  s = s.replace(/((?:\|[^\n]+\|\n?){2,})/g, (block) => {
-    if (!block.includes('---')) return block
-    return _mdTableToHtml(block)
-  })
+  // 7. 还原 HTML 块
+  s = s.replace(/\x00HTML(\d+)\x00/g, (_, i) => htmlBlocks[Number(i)])
 
   return s.replace(/\n/g, '<br/>')
 }

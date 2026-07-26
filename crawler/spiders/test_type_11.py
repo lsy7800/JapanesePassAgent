@@ -8,21 +8,23 @@ class TestType11(Spider):
 
     结构：span.con 内含结构化 HTML（<table> 或带边框 <div>/<p>），固定 2 个 icheck 组。
     转换策略：
-      - <table>           → Markdown 表格（| col | col |）
-      - <div/p> border    → 【BOX】...【/BOX】文本块
-      - <u>               → 【U】...【/U】
-      - <br>/<p>          → 换行
-      - 其余标签           → 剥离
+      - <table>        → HTML 表格（保留 rowspan/colspan 及格内换行，直接存 HTML）
+      - <div/p> border → 【BOX】...【/BOX】文本块
+      - <h1>/<h2>/<h3> → 标题文本行
+      - <u>            → 【U】...【/U】
+      - <br>/<p>       → 换行
+      - 其余标签        → 剥离
+    article 字段存储 HTML 片段，前端 v-html 直接渲染。
     产出通用「一篇 N 问」嵌套结构，复用 write_reading_to_mysql 入库路径。
     """
     SHITIBIAO = 79
     COUNT = 35
 
-    # ── HTML → 纯文本工具 ──────────────────────────────────────────────
+    # ── HTML → 序列化工具 ─────────────────────────────────────────────
 
     @staticmethod
     def _el_text(el):
-        """序列化单个元素：<u>→标记，<br>/<p>→换行，其余标签剥离。"""
+        """序列化单个元素为纯文本：<u>→标记，<br>/<p>→换行，其余标签剥离。"""
         s = etree.tostring(el, encoding="unicode")
         s = re.sub(r"<u\b[^>]*>", "【U】", s, flags=re.I)
         s = re.sub(r"</u\s*>", "【/U】", s, flags=re.I)
@@ -35,54 +37,104 @@ class TestType11(Spider):
         return s.strip()
 
     @classmethod
-    def _table_to_md(cls, table_el):
-        """把 <table> 转成 Markdown 表格。"""
+    def _table_to_html(cls, table_el):
+        """把 <table> 序列化为带样式类的 HTML，保留 rowspan/colspan 及格内 <br>。"""
+        def _cell_inner(td):
+            s = etree.tostring(td, encoding="unicode")
+            # 剥除外层 <td>/<th> 标签，只保留内容
+            s = re.sub(r"^<t[dh][^>]*>", "", s, flags=re.I)
+            s = re.sub(r"</t[dh]\s*>$", "", s.rstrip(), flags=re.I)
+            s = re.sub(r"<u\b[^>]*>", "【U】", s, flags=re.I)
+            s = re.sub(r"</u\s*>", "【/U】", s, flags=re.I)
+            s = re.sub(r"<br\s*/?>", "<br>", s, flags=re.I)
+            s = re.sub(r"</?p[^>]*>", "", s, flags=re.I)
+            s = re.sub(r"<[^>]+>", "", s)
+            s = re.sub(r"[ \t　\xa0]+", " ", s)
+            return s.strip()
+
+        def _td_attrs(td):
+            attrs = ""
+            if td.get("rowspan"): attrs += f' rowspan="{td.get("rowspan")}"'
+            if td.get("colspan"): attrs += f' colspan="{td.get("colspan")}"'
+            return attrs
+
+        def _tr_html(tr, in_head=False):
+            cells = []
+            for td in tr:
+                tag = "th" if (td.tag == "th" or in_head) else "td"
+                cells.append(f"<{tag}{_td_attrs(td)}>{_cell_inner(td)}</{tag}>")
+            return "<tr>" + "".join(cells) + "</tr>"
+
         lines = []
         cap = table_el.find(".//caption")
         if cap is not None:
             txt = "".join(cap.itertext()).replace("\xa0", " ").strip()
             if txt:
-                lines.append(f"【{txt}】")
+                lines.append(f"<caption>{txt}</caption>")
 
         thead = table_el.find(".//thead")
         tbody = table_el.find(".//tbody")
-        header_rows = thead.findall(".//tr") if thead is not None else []
-        body_rows = tbody.findall(".//tr") if tbody is not None else table_el.findall(".//tr")
+        all_trs = table_el.findall(".//tr")
 
-        def _cells(tr):
-            return [
-                "".join(td.itertext()).replace("\n", " ").replace("\xa0", " ").strip()
-                for td in (tr.findall("th") + tr.findall("td"))
-            ]
+        if thead is not None:
+            lines.append("<thead>" + "".join(_tr_html(tr, True) for tr in thead.findall(".//tr")) + "</thead>")
+            body_trs = tbody.findall(".//tr") if tbody is not None else []
+        else:
+            first = all_trs[0] if all_trs else None
+            if first is not None and all(td.tag == "th" for td in first):
+                lines.append("<thead>" + _tr_html(first, True) + "</thead>")
+                body_trs = all_trs[1:]
+            else:
+                body_trs = all_trs
 
-        if header_rows:
-            hcells = _cells(header_rows[0])
-            lines.append("| " + " | ".join(hcells) + " |")
-            lines.append("| " + " | ".join(["---"] * len(hcells)) + " |")
-            for tr in header_rows[1:]:
-                lines.append("| " + " | ".join(_cells(tr)) + " |")
-        for tr in body_rows:
-            cells = _cells(tr)
-            if any(cells):
-                lines.append("| " + " | ".join(cells) + " |")
-        return "\n".join(lines)
+        body = "".join(_tr_html(tr) for tr in body_trs)
+        if body:
+            lines.append(f"<tbody>{body}</tbody>")
+
+        return '<table class="info-table">' + "".join(lines) + "</table>"
 
     @classmethod
     def _article_text(cls, span_el):
-        """序列化 span.con：table→MD，border 元素→【BOX】，其余→文本。"""
+        """序列化 span.con：递归处理所有子元素，直接输出 HTML 表格，其余转文本。"""
         parts = []
-        for ch in span_el:
-            tag = ch.tag
-            style = ch.get("style", "")
+
+        def _walk(el):
+            tag = el.tag
+            style = el.get("style", "")
+
             if tag == "table":
-                parts.append(cls._table_to_md(ch))
-            elif "border-style" in style and "solid" in style:
-                parts.append("【BOX】\n" + cls._el_text(ch) + "\n【/BOX】")
-            else:
-                txt = cls._el_text(ch)
+                parts.append(cls._table_to_html(el))
+                return
+
+            if tag in ("h1", "h2", "h3", "h4"):
+                txt = " ".join(el.itertext()).replace("\xa0", " ").strip()
                 if txt:
                     parts.append(txt)
-        # span 自身也可能有 tail text（少见）
+                return
+
+            if "border-style" in style and "solid" in style:
+                parts.append("【BOX】\n" + cls._el_text(el) + "\n【/BOX】")
+                return
+
+            # 普通元素：先输出自身直接文本，再递归子元素
+            direct = (el.text or "").replace("\xa0", " ").strip()
+            if direct:
+                parts.append(direct)
+            for ch in el:
+                _walk(ch)
+                tail = (ch.tail or "").replace("\xa0", " ").strip()
+                if tail:
+                    parts.append(tail)
+
+        direct = (span_el.text or "").replace("\xa0", " ").strip()
+        if direct:
+            parts.append(direct)
+        for ch in span_el:
+            _walk(ch)
+            tail = (ch.tail or "").replace("\xa0", " ").strip()
+            if tail:
+                parts.append(tail)
+
         result = "\n".join(p for p in parts if p)
         result = re.sub(r"\n{3,}", "\n\n", result)
         return result.strip()
@@ -109,7 +161,6 @@ class TestType11(Spider):
             return None
         jb = jb[0]
 
-        # 固定 2 个 icheck 组
         groups = sorted(
             set(html.xpath("//input[starts-with(@name,'icheck')]/@name")),
             key=lambda x: int(x[6:]) if x[6:].isdigit() else 0,

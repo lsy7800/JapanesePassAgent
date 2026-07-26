@@ -40,24 +40,21 @@ function renderContent(content, marked) {
 }
 
 // 渲染文章（完形/阅读）：转义 + 高亮空号 （1）… + 下划线标记 【U】…【/U】+ 保留换行
-// 把 Markdown 表格文本转成 HTML <table>
-function _mdTableToHtml(block) {
-  const lines = block.trim().split('\n')
-  if (lines.length < 2) return block
-  const parseRow = (line) => line.replace(/^\||\|$/g, '').split('|').map(c => c.trim())
-  const header = parseRow(lines[0])
-  const rows = lines.slice(2).map(parseRow)
-  const ths = header.map(h => `<th>${h}</th>`).join('')
-  const trs = rows.map(r => '<tr>' + r.map(c => `<td>${c}</td>`).join('') + '</tr>').join('')
-  return `<table class="info-table"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`
-}
-
 function renderArticle(article) {
   if (article == null) return ''
   let s = String(article)
+
+  const htmlBlocks = []
+  s = s.replace(/<table[\s\S]*?<\/table>/gi, (m) => {
+    htmlBlocks.push(m)
+    return `\x00HTML${htmlBlocks.length - 1}\x00`
+  })
+
+  s = s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
+
   s = s.replace(/（\d+[a-zA-Z]?）/g, (m) => `<span class="cloze-blank">${m}</span>`)
   s = s.replace(/【U】([\s\S]*?)【\/U】/g, (_m, inner) => `<u class="reading-underline">${inner}</u>`)
   s = s.replace(/【文章A】/g, '<div class="article-label">文章A</div>')
@@ -65,12 +62,11 @@ function renderArticle(article) {
   s = s.replace(/【BOX】\n?([\s\S]*?)\n?【\/BOX】/g, (_m, inner) => {
     return `<div class="info-box">${inner.replace(/\n/g, '<br/>')}</div>`
   })
-  s = s.replace(/((?:\|[^\n]+\|\n?){2,})/g, (block) => {
-    if (!block.includes('---')) return block
-    return _mdTableToHtml(block)
-  })
+  s = s.replace(/\x00HTML(\d+)\x00/g, (_, i) => htmlBlocks[Number(i)])
+
   return s.replace(/\n/g, '<br/>')
 }
+
 
 function renderMd(text) {
   return marked.parse(text || '')
