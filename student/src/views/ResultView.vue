@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { marked } from 'marked'
 import { getResult } from '../api/exam'
 import { chatStream } from '../api/agent'
+import { audioUrl } from '../utils/audio'
 
 const props = defineProps({ id: { type: String, required: true } })
 const router = useRouter()
@@ -72,6 +73,15 @@ function renderMd(text) {
   return marked.parse(text || '')
 }
 
+// AI 解析结果一律以【原文翻译】/【判断】等小节开头；裁掉模型可能带出的开场白
+// （“好的，我来分析…”“正在调用工具…”），保证只显示解析正文
+function renderJudge(text) {
+  let s = text || ''
+  const first = s.indexOf('【')
+  if (first > 0) s = s.slice(first)
+  return marked.parse(s)
+}
+
 async function load() {
   try {
     result.value = await getResult(Number(props.id))
@@ -93,7 +103,10 @@ function judgeItem(item, q) {
   for (const o of q.options) opts[o.label] = o.content
 
   const ctx = item.article ? `文章：${item.article}\n本题为文章中第（${q.sub_seq}）空。\n` : ''
-  const message = `请用 answer_judge 工具分析这道题：
+  const articleHint = item.article
+    ? '（本题含文章，把 article 参数一并传入，翻译原文并结合文章讲解）'
+    : ''
+  const message = `分析下面这道题，用 answer_judge 工具。${articleHint}直接输出工具返回的解析内容即可，不要写任何开场白、思考过程或“正在调用工具”之类的说明文字。
 ${ctx}题目：${q.content || '（见文章空格）'}
 选项：${Object.entries(opts).map(([k, v]) => `${k.toUpperCase()}. ${v}`).join('  ')}
 正确答案：${q.correct_answer}
@@ -165,7 +178,15 @@ onMounted(load)
 
       <!-- 每张卡片：单选题 1 子题；完形题文章 + N 子题 -->
       <el-card v-for="item in result.items" :key="item.group_id" shadow="never" class="q-card">
-        <div v-if="item.article" class="q-article" v-html="renderArticle(item.article)"></div>
+        <!-- 听力题：音频播放器 -->
+        <div v-if="item.audio_url" class="q-audio">
+          <audio controls preload="none" :src="audioUrl(item.audio_url)"></audio>
+        </div>
+        <!-- 听力题结果页展示原文脚本供对照复习；完形/阅读题展示文章 -->
+        <div v-if="item.article" class="q-article" :class="{ 'listening-script': item.audio_url }">
+          <div v-if="item.audio_url" class="script-label">听力原文</div>
+          <div v-html="renderArticle(item.article)"></div>
+        </div>
 
         <div
           v-for="q in item.questions"
@@ -214,7 +235,7 @@ onMounted(load)
 
           <div v-if="judgeState[q.no]?.text || judgeState[q.no]?.streaming" class="ai-analysis">
             <div class="ai-label">🤖 AI 解析</div>
-            <div class="md" v-html="renderMd(judgeState[q.no].text)" />
+            <div class="md" v-html="renderJudge(judgeState[q.no].text)" />
             <span v-if="judgeState[q.no]?.streaming" class="cursor">▍</span>
           </div>
         </div>
@@ -282,6 +303,17 @@ onMounted(load)
 .q-seq { font-weight: 600; }
 .ai-btn { margin-left: auto; }
 .q-content { font-size: 15px; line-height: 1.7; margin-bottom: 12px; }
+
+/* 听力题音频播放器 */
+.q-audio { margin-bottom: 14px; }
+.q-audio audio { width: 100%; height: 40px; }
+/* 听力原文脚本标签 */
+.script-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #909399;
+  margin-bottom: 6px;
+}
 
 /* 完形题文章块 */
 .q-article {

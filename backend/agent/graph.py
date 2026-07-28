@@ -42,7 +42,8 @@ SYSTEM_PROMPT = """你是一位专业的日语能力考试（JLPT）辅导专家
      绝不要为每个题型分别调用 generate_exam（那会拆成多张卷、多份文件）
 3. 用户想看某类题目或需要例题时，调用 fetch_questions
 4. 用户问语法点或词汇用法时，调用 explain_grammar 生成结构化讲解
-5. 用户提交了某题的作答、想知道对错原因时，调用 answer_judge
+5. 用户提交了某题的作答、想知道对错原因时，调用 answer_judge；
+   若该题带有文章（阅读/完形题），务必把文章作为 article 参数传入，工具会翻译原文并结合文章讲解
 6. 用户完成考试后想了解薄弱点时，调用 analyze_weak_points（需提供 exam_id）
 7. 用户想针对薄弱知识点练习时，调用 recommend_questions 推荐题目
 8. 用户想把试卷导出/下载/打印/写入文件时，调用 export_exam（需先有 generate_exam 返回的 exam_id）；

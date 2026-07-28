@@ -276,6 +276,7 @@ def answer_judge(
     correct_answer: str,
     user_answer: str,
     analysis: str | None = None,
+    article: str | None = None,
 ) -> str:
     """对用户的作答进行 AI 判断和个性化解析。
 
@@ -285,17 +286,25 @@ def answer_judge(
     - correct_answer: 正确答案标签（a/b/c/d）
     - user_answer: 用户选择的答案标签（a/b/c/d）
     - analysis: 题目原有解析（可选，作为补充参考）
+    - article: 阅读/完形题的文章正文（可选；阅读题务必传入，用于翻译帮助理解）
 
-    返回包含判断结果、错误原因分析和记忆建议的文本。
+    返回包含题目翻译、判断结果、错误原因分析和记忆建议的文本。
     """
     is_correct = user_answer.lower() == correct_answer.lower()
     verdict = "✓ 回答正确！" if is_correct else f"✗ 回答错误（你选了 {user_answer.upper()}，正确答案是 {correct_answer.upper()}）"
 
     opts_text = "\n".join(f"  {k.upper()}. {v}" for k, v in sorted(options.items()))
     ref_analysis = f"\n\n【原题解析参考】\n{analysis}" if analysis else ""
+    article_text = f"\n文章：{article}" if article else ""
+    translate_hint = (
+        "（在此一段内完整翻译成通顺中文：先翻译文章正文（按原意分段），"
+        "再翻译题干，最后翻译各选项并用 A/B/C/D 标注。只输出这一个翻译小节，不要另起其他翻译段落）"
+        if article
+        else "（把题干和各选项完整翻译成通顺的中文，选项用 A/B/C/D 标注）"
+    )
 
     prompt = f"""你是 JLPT 考试辅导老师，请对以下题目的作答给出详细点评。
-
+{article_text}
 题目：{question_content}
 选项：
 {opts_text}
@@ -304,6 +313,9 @@ def answer_judge(
 判断：{verdict}{ref_analysis}
 
 请按以下格式输出点评，语言简洁，重点突出：
+
+【原文翻译】
+{translate_hint}
 
 【判断】
 {verdict}
