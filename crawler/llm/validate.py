@@ -644,6 +644,149 @@ def process_audit(passage):
     }
 
 
+# ========== 听力题审核模式（--listening）==========
+# 听力题结构：一段音频 + 听力原文脚本(article) + 设问(question) + 四选项 + 录入答案。
+# 源站多数题无文字解析，故此模式既审核（独立复核答案、设问与脚本是否相关、错别字），
+# 又补生成中文解析（为什么选它 + 各错项为何错），供学生对照原文理解。
+# 审核只报告不改写：原文脚本/设问/选项/录入答案一律保真，判断与差异写入附加字段。
+
+def build_quick_response_prompt(item):
+    """即时应答题（即時応答）：无脚本，只有音频里说的一句话 + 若干应答选项，选最合适的应答。"""
+    opts = item.get("choice", []) or []
+    labeled = "，".join(f"{_LETTERS[i]}. {opts[i]}" for i in range(len(opts)))
+    recorded = normalize_answer(item.get("answer", ""))
+    return f"""
+你是日语能力考试(JLPT)「即时应答（即時応答）」题的资深审校专家。这类题的形式是：
+音频里有人说了一句话（下面的「提示语」），考生从若干个应答中选出最自然、最得体的一个。
+本题**没有听力脚本**，提示语就是全部内容。这些题人工录入，**可能有录入错误**，请独立严格审核。
+
+请完成三项：
+1. 【独立作答】你自己判断：针对提示语，哪个选项是最自然得体的应答（a/b/c/…）。
+   先独立判断，再与录入答案比较；不要因为看到「录入答案」就附和。
+2. 【文本问题】指出提示语或选项中的错别字、乱码、明显 OCR 错误。
+3. 【生成解析】写一段中文解析：说明提示语的意思、为何该选项应答最合适、其余为何不当。
+
+严格要求：
+- 绝对不要改写提示语、选项或录入答案，只做判断与报告。
+- 提示语里「女：」「男：」等是说话人标记，理解即可。
+- 本题无脚本属正常，不要因此判为「不相关」；question_relevant 一律填 true。
+
+输出必须为 JSON：
+{{
+  "level": "N1",
+  "question_relevant": true,
+  "relevance_note": "",
+  "model_answer": "c",
+  "recorded_answer": "{recorded}",
+  "answer_agrees": true,
+  "answer_confidence": "high",
+  "text_issues": [],
+  "audit_comment": "",
+  "analysis": "【答案解析】...\\n【错项分析】a选项:...，b选项:...，c选项:..."
+}}
+
+提示语（音频中说的话）：{item.get("question", "")}
+应答选项：{labeled}
+录入答案（待你核对，勿盲信）：{recorded}
+"""
+
+
+def build_listening_prompt(item):
+    # 无脚本（article 空）→ 即时应答题，走专用 prompt
+    if not (item.get("article") or "").strip():
+        return build_quick_response_prompt(item)
+    opts = item.get("choice", []) or []
+    labeled = "，".join(f"{_LETTERS[i]}. {opts[i]}" for i in range(len(opts)))
+    recorded = normalize_answer(item.get("answer", ""))
+    return f"""
+你是日语能力考试(JLPT)听力题的资深审校专家。下面是一道听力题：一段听力原文脚本 + 一个设问 + 四个选项。
+这些题目是人工历史录入的，**可能存在录入错误**。请你独立、严格地审核，不要预设录入是对的。
+
+请完成四项：
+1. 【设问相关性】判断设问是否确实针对这段听力脚本（设问问的内容能在脚本中找到依据）。
+   若设问与脚本明显无关、或像是别的题被错误录入到这里，判为不相关。
+2. 【独立作答】你**自己**通读听力脚本后独立选出正确答案（a/b/c/d），不要因为看到「录入答案」就附和。
+   先独立判断，再与录入答案比较。
+3. 【文本问题】指出脚本、设问或选项中的错别字、乱码、明显 OCR 错误。
+4. 【生成解析】写一段中文解析：先说明正确答案对应脚本中的哪句话/哪个信息，再简述各错项为何不对。
+
+严格要求：
+- 绝对不要改写脚本、设问、选项或录入答案的内容，你只做判断与报告。
+- 听力脚本里「女：」「男：」等是说话人标记，理解即可，勿改写。
+
+输出必须为 JSON：
+{{
+  "level": "N1",
+  "question_relevant": true,
+  "relevance_note": "",
+  "model_answer": "c",
+  "recorded_answer": "c",
+  "answer_agrees": true,
+  "answer_confidence": "high",
+  "text_issues": [],
+  "audit_comment": "",
+  "analysis": "【答案解析】...\\n【错项分析】a选项:...，b选项:...，c选项:...，d选项:..."
+}}
+
+听力原文脚本：
+{item.get("article", "")}
+
+设问：{item.get("question", "")}
+选项：{labeled}
+录入答案（待你核对，勿盲信）：{recorded}
+"""
+
+
+def process_listening(item):
+    """审核一道听力题：独立复核答案、设问相关性、文本错误，并补生成中文解析。
+
+    保真原值（question/choice/answer 取抓取原值），附加审核字段；
+    need_review：「设问不相关 / 答案不一致 / 有文本问题」任一即标记，供人工排查。
+    """
+    raw = call_deepseek(build_listening_prompt(item))
+    parsed = safe_parse(raw)
+
+    m = re.search(r"N[1-5]", item.get("date", "") or "")
+    level = m.group(0) if m else (parsed.get("level") or "N1")
+
+    opts = item.get("choice", []) or []
+    options = {_LETTERS[i]: (opts[i] if i < len(opts) else "") for i in range(4)}
+    recorded = normalize_answer(item.get("answer", ""))
+    model_answer = normalize_answer(parsed.get("model_answer", "") or "")
+    relevant = parsed.get("question_relevant", True)
+    text_issues = parsed.get("text_issues", []) or []
+    answer_agrees = bool(model_answer) and model_answer == recorded
+
+    reasons = []
+    if relevant is False:
+        reasons.append("设问疑与脚本不符")
+    if model_answer and not answer_agrees:
+        reasons.append(f"答案存疑(录入{recorded}/模型{model_answer})")
+    if text_issues:
+        reasons.append("文本疑有错")
+
+    return {
+        "id": item.get("id"),
+        "date": item.get("date", ""),
+        "level": level,
+        "audio_url": item.get("audio_url", ""),
+        "article": item.get("article", ""),
+        "question": item.get("question", ""),
+        "options": options,
+        "answer": recorded,                 # 保真：录入答案原样保留
+        "model_answer": model_answer,
+        "answer_agrees": answer_agrees,
+        "answer_confidence": str(parsed.get("answer_confidence", "")).strip(),
+        "question_relevant": relevant,
+        "relevance_note": (parsed.get("relevance_note") or "").strip(),
+        "text_issues": text_issues,
+        "audit_comment": (parsed.get("audit_comment") or "").strip(),
+        "analysis": (parsed.get("analysis") or "").strip(),
+        "need_review": bool(reasons),
+        "review_flags": reasons,
+    }
+
+
 if __name__ == "__main__":
     import argparse
     import os
@@ -664,6 +807,8 @@ if __name__ == "__main__":
                         help="中长篇阅读模式：一篇文章 + 多问的嵌套结构，逐篇校验")
     parser.add_argument("--audit", action="store_true",
                         help="审核模式：不信任录入，独立复核答案+检查问句相关性+找错别字，只报告不改写（嵌套阅读结构）")
+    parser.add_argument("--listening", action="store_true",
+                        help="听力审核模式：扁平单题（脚本+设问+四选项），独立复核答案+设问相关性+错别字，并补生成中文解析")
     args = parser.parse_args()
 
     unit = "篇" if (args.passage or args.reading_passage or args.audit) else "题"
@@ -699,6 +844,8 @@ if __name__ == "__main__":
                 result = process_reading_passage(item)
             elif args.audit:
                 result = process_audit(item)
+            elif args.listening:
+                result = process_listening(item)
             elif args.reading:
                 result = process_reading(item)
             else:

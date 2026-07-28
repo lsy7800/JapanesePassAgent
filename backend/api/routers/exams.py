@@ -47,9 +47,9 @@ def _group_options(cursor, question_id: int) -> list[ExamOptionOut]:
 
 
 def _group_meta(cursor, group_id: int):
-    """取题组元信息（题型/级别/文章）。"""
+    """取题组元信息（题型/级别/文章/听力音频）。"""
     cursor.execute(
-        "SELECT type, level, article FROM question_groups WHERE id = %s",
+        "SELECT type, level, article, audio_url FROM question_groups WHERE id = %s",
         (group_id,),
     )
     return cursor.fetchone()
@@ -237,6 +237,7 @@ def _build_exam(conn, exam_id: int) -> ExamOut:
                     type=g["type"] if g else "",
                     level=(g["level"] or "") if g else "",
                     article=g["article"] if g else None,
+                    audio_url=g.get("audio_url") if g else None,
                     questions=[],
                 ))
             q = _sub_question(cursor, r["group_id"], r["sub_seq"])
@@ -344,6 +345,7 @@ def _build_result(conn, exam_id: int) -> ExamResultOut:
                     group_id=r["group_id"],
                     type=g["type"] if g else "",
                     article=g["article"] if g else None,
+                    audio_url=g.get("audio_url") if g else None,
                     questions=[],
                 ))
             q = _sub_question(cursor, r["group_id"], r["sub_seq"])

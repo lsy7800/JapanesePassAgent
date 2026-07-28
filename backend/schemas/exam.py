@@ -91,6 +91,7 @@ class ExamItemOut(BaseModel):
     type: str
     level: str = ""
     article: RichText | None = None
+    audio_url: str | None = Field(default=None, description="听力音频相对路径，前端拼 base 前缀播放")
     questions: list[ExamSubQuestion] = Field(default_factory=list)
 
 
@@ -161,6 +162,7 @@ class ResultItemOut(BaseModel):
     group_id: int
     type: str = ""
     article: RichText | None = None
+    audio_url: str | None = Field(default=None, description="听力音频相对路径，前端拼 base 前缀播放")
     questions: list[ResultSubQuestion] = Field(default_factory=list)
 
 

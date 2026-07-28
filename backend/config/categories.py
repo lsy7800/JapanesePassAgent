@@ -48,13 +48,15 @@ CATEGORIES = [
     {"code": "reading_thesis", "name": "论点理解（长篇）", "name_ja": "主張理解（長文）", "section": SECTION_READING, "levels": ["N1", "N2"],                   "examable": False},
     {"code": "info_search",    "name": "信息检索",         "name_ja": "情報検索",         "section": SECTION_READING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": True},
 
-    # ── 听力（需音频，暂不支持出题，学生端隐藏） ──
-    {"code": "task_listening", "name": "问题理解", "name_ja": "課題理解",   "section": SECTION_LISTENING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": False},
-    {"code": "point_listening","name": "重点理解", "name_ja": "ポイント理解", "section": SECTION_LISTENING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": False},
-    {"code": "summary_listen", "name": "概要理解", "name_ja": "概要理解",   "section": SECTION_LISTENING, "levels": ["N1", "N2", "N3"],             "examable": False},
+    # ── 听力（带音频，前端支持播放器答题） ──
+    # 課題理解已接入音频+审核数据（N1，shitibiao 80），开放出题；其余听力题型暂无数据，保持关闭。
+    {"code": "task_listening", "name": "问题理解", "name_ja": "課題理解",   "section": SECTION_LISTENING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": True},
+    {"code": "point_listening","name": "重点理解", "name_ja": "ポイント理解", "section": SECTION_LISTENING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": True},
+    # 概要理解已接入音频+审核数据（N1，shitibiao 82），开放出题
+    {"code": "summary_listen", "name": "概要理解", "name_ja": "概要理解",   "section": SECTION_LISTENING, "levels": ["N1", "N2", "N3"],             "examable": True},
     {"code": "verbal_express", "name": "语言表达", "name_ja": "発話表現",   "section": SECTION_LISTENING, "levels": ["N3", "N4", "N5"],             "examable": False},
-    {"code": "quick_response", "name": "即时应答", "name_ja": "即時応答",   "section": SECTION_LISTENING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": False},
-    {"code": "integ_listen",   "name": "综合理解", "name_ja": "統合理解",   "section": SECTION_LISTENING, "levels": ["N1", "N2"],                   "examable": False},
+    {"code": "quick_response", "name": "即时应答", "name_ja": "即時応答",   "section": SECTION_LISTENING, "levels": ["N1", "N2", "N3", "N4", "N5"], "examable": True},
+    {"code": "integ_listen",   "name": "综合理解", "name_ja": "統合理解",   "section": SECTION_LISTENING, "levels": ["N1", "N2"],                   "examable": True},
 ]
 
 # code -> 定义 的索引

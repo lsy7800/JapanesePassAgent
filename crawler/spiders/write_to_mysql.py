@@ -1,6 +1,7 @@
 import csv
 import json
 import os
+import re
 import pymysql
 
 from crawler.config import DB_CONFIG
@@ -300,6 +301,175 @@ def write_reading_to_mysql(json_path, source=None, category="reading_short"):
     else:
         normalize = _reading_to_passage
     _write_passages(json_path, source, category, "reading", normalize=normalize)
+
+
+INSERT_LISTENING_GROUP_SQL = """
+INSERT INTO question_groups (
+    type, category, article, audio_url, level, exam_date, difficulty, knowledge_points, source, source_ref
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+"""
+
+
+def _num_to_label(ans):
+    """答案数字（'1'~'4' / 1~4）转选项字母（a~d）；已是字母则原样返回。"""
+    s = str(ans).strip().lower()
+    if s in OPTION_LABELS:
+        return s
+    if s.isdigit() and 1 <= int(s) <= len(OPTION_LABELS):
+        return OPTION_LABELS[int(s) - 1]
+    return ""
+
+
+def _insert_listening(cursor, item, source, category):
+    """听力题入库：1 题组（type=listening, article=原文脚本, audio_url）+ 1 子题 + 4 选项。
+
+    爬虫产出扁平结构：question=设问, article=听力原文脚本, choice=选项列表,
+    answer=答案数字(1~4), analysis=答案说明(可能空), audio_url=音频相对路径。
+    """
+    source_ref = f"{source}#{item.get('id')}"
+    level = ""
+    date = item.get("date", "")
+    m = re.search(r"N[1-5]", date)
+    if m:
+        level = m.group(0)
+    knowledge_points = json.dumps(item.get("knowledge_points", []), ensure_ascii=False)
+
+    cursor.execute(INSERT_LISTENING_GROUP_SQL, (
+        "listening",
+        category,
+        item.get("article", ""),        # 听力原文脚本
+        item.get("audio_url", ""),      # 音频相对路径
+        level,
+        date,
+        _parse_difficulty(item.get("difficulty")),
+        knowledge_points,
+        source,
+        source_ref,
+    ))
+    group_id = cursor.lastrowid
+
+    cursor.execute(INSERT_QUESTION_SQL, (
+        group_id,
+        1,                              # 听力一段音频一问，seq 固定 1
+        item.get("question", ""),       # content：设问
+        "",                             # marked 留空
+        _num_to_label(item.get("answer", "")),
+        item.get("analysis", ""),       # 答案说明（多数为空）
+    ))
+    question_id = cursor.lastrowid
+
+    # 按实际选项数写入（听力题多为 4 选，即时应答为 3 选）；不补空选项，
+    # 避免前端渲染出多余的空 d 选项。
+    choice = item.get("choice", []) or []
+    for i, content in enumerate(choice[:len(OPTION_LABELS)]):
+        cursor.execute(INSERT_OPTION_SQL, (question_id, OPTION_LABELS[i], content))
+
+
+def write_listening_to_mysql(json_path, source=None, category="task_listening"):
+    """听力题批量入库，按 source 幂等替换。
+
+    category 默认 task_listening（課題理解）；其他听力题型（point_listening 等）
+    传对应 code 即可。音频只存相对路径，前端拼可配置 base 前缀播放。
+    """
+    full_path = _resolve_data_path(json_path)
+    if source is None:
+        source = os.path.splitext(os.path.basename(json_path))[0]
+
+    with open(full_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    conn = pymysql.connect(**DB_CONFIG)
+    try:
+        cursor = conn.cursor()
+        init_schema(cursor)
+
+        cursor.execute(DELETE_SOURCE_SQL, (source,))
+        print(f"已清理来源 '{source}' 的旧数据")
+
+        ok = 0
+        for item in data:
+            try:
+                _insert_listening(cursor, item, source, category)
+                ok += 1
+            except Exception as e:
+                print(f"写入失败 id: {item.get('id')}, 错误: {e}")
+
+        conn.commit()
+        print(f"写入完成: {ok}/{len(data)} 题（source={source}, category={category}, type=listening）")
+    finally:
+        conn.close()
+
+
+def _insert_listening_passage(cursor, item, source, category):
+    """综合理解等「一段音频 + N 子题」入库：1 题组（listening, article=脚本, audio_url）+ N 子题。
+
+    嵌套结构：item = {id, audio_url, article, date, questions:[{no,question,options,answer,analysis}]}。
+    子题选项为 dict（a/b/c/d）；按实际选项数写入，不补空。
+    """
+    source_ref = f"{source}#{item.get('id')}"
+    level = ""
+    m = re.search(r"N[1-5]", item.get("date", "") or "")
+    if m:
+        level = m.group(0)
+
+    cursor.execute(INSERT_LISTENING_GROUP_SQL, (
+        "listening",
+        category,
+        item.get("article", ""),        # 听力脚本
+        item.get("audio_url", ""),
+        level,
+        item.get("date", ""),
+        0,
+        json.dumps([], ensure_ascii=False),
+        source,
+        source_ref,
+    ))
+    group_id = cursor.lastrowid
+
+    for i, q in enumerate(item.get("questions", []), 1):
+        cursor.execute(INSERT_QUESTION_SQL, (
+            group_id,
+            q.get("no", i),
+            q.get("question", ""),      # 题干（统合理解留空）
+            "",
+            _num_to_label(q.get("answer", "")),
+            q.get("analysis", ""),
+        ))
+        question_id = cursor.lastrowid
+        options = q.get("options", {}) or {}
+        for label in OPTION_LABELS:
+            if label in options and options[label]:
+                cursor.execute(INSERT_OPTION_SQL, (question_id, label, options[label]))
+
+
+def write_listening_passage_to_mysql(json_path, source=None, category="integ_listen"):
+    """综合理解（一段音频 N 子题）批量入库，按 source 幂等替换。"""
+    full_path = _resolve_data_path(json_path)
+    if source is None:
+        source = os.path.splitext(os.path.basename(json_path))[0]
+
+    with open(full_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    conn = pymysql.connect(**DB_CONFIG)
+    try:
+        cursor = conn.cursor()
+        init_schema(cursor)
+        cursor.execute(DELETE_SOURCE_SQL, (source,))
+        print(f"已清理来源 '{source}' 的旧数据")
+
+        groups = subs = 0
+        for item in data:
+            try:
+                _insert_listening_passage(cursor, item, source, category)
+                groups += 1
+                subs += len(item.get("questions", []))
+            except Exception as e:
+                print(f"写入失败 id: {item.get('id')}, 错误: {e}")
+        conn.commit()
+        print(f"写入完成: {groups}/{len(data)} 组，共 {subs} 子题（source={source}, category={category}, type=listening）")
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

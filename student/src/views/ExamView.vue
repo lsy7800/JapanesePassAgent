@@ -4,11 +4,13 @@ import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Flag } from '@element-plus/icons-vue'
 import { generateExam, submitExam, getCategories, smartGenerateExam } from '../api/exam'
+import { audioUrl } from '../utils/audio'
 
 const router = useRouter()
 const route = useRoute()
 
-const LEVEL_OPTIONS = ['N1', 'N2', 'N3', 'N4', 'N5']
+// 暂时只开放 N1，其他级别数据尚未就绪，先不展示
+const LEVEL_OPTIONS = ['N1']
 
 const phase = ref('config')
 
@@ -586,8 +588,13 @@ onUnmounted(() => {
         shadow="never"
         class="q-card"
       >
-        <!-- 完形题：先展示文章（内含 （N） 空） -->
-        <div v-if="item.article" class="q-article" v-html="renderArticle(item.article)"></div>
+        <!-- 听力题：音频播放器（答题时不显示原文脚本，避免泄题） -->
+        <div v-if="item.audio_url" class="q-audio">
+          <audio controls preload="none" :src="audioUrl(item.audio_url)"></audio>
+        </div>
+
+        <!-- 完形/阅读题：展示文章（内含 （N） 空）；听力题的 article 是脚本，答题时隐藏 -->
+        <div v-if="item.article && !item.audio_url" class="q-article" v-html="renderArticle(item.article)"></div>
 
         <!-- 子题：单选题 1 道；完形题 N 道 -->
         <div
@@ -763,6 +770,14 @@ onUnmounted(() => {
 .q-card {
   margin-top: 14px;
   scroll-margin-top: 160px; /* 跳转时避开粘性答题栏 */
+}
+/* 听力题音频播放器 */
+.q-audio {
+  margin-bottom: 16px;
+}
+.q-audio audio {
+  width: 100%;
+  height: 40px;
 }
 /* 完形题文章块 */
 .q-article {
