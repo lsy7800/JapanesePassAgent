@@ -42,6 +42,29 @@ def get_current_user(
     return user
 
 
+def auth_by_query_token(token: str, conn) -> int:
+    """SSE 专用认证：从 query param token 解析用户，返回 user_id。
+
+    EventSource 不支持自定义请求头，故 token 只能走 query string。
+    被 agent/exams 两处 SSE 端点复用。
+    """
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未登录")
+    try:
+        payload = decode_token(token)
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token 无效或已过期")
+    user_id = int(payload["sub"])
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, is_active FROM users WHERE id = %s", (user_id,))
+        user = cur.fetchone()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")
+    if not user["is_active"]:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="账号已停用")
+    return user_id
+
+
 def require_admin(user=Depends(get_current_user)):
     """在 get_current_user 基础上额外要求 admin 角色。"""
     if user["role"] != "admin":

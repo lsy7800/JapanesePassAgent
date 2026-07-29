@@ -9,16 +9,16 @@
 判分细化到子题级：单选题一题组一子题；完形/阅读一题组多子题，逐子题比对答案。
 不调用 LLM，纯比对，结果确定。
 """
+import json
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import StreamingResponse
 
-from backend.api.deps import get_db, get_current_user
+from backend.api.deps import auth_by_query_token, get_db, get_current_user
 from backend.api.exam_export import render_exam_markdown
-from backend.config.categories import get_categories
-from backend.services.exam_builder import build_exam, persist_exam
-from backend.services.exam_planner import plan_exam
-from backend.services.stats_service import compute_weak_points
+from backend.services.exam_builder import persist_exam
+from backend.services.smart_exam import NoQuestionsError, run_smart_exam, stream_smart_exam
 from backend.schemas.exam import (
     ExamGenerateRequest,
     ExamHistoryResponse,
@@ -155,57 +155,51 @@ def smart_generate(
     conn=Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """AI 智能组卷：结合用户薄弱点，让 LLM 规划抽题方案并落库为可作答试卷。
+    """AI 智能组卷（一次性返回）：结合用户薄弱点，让 LLM 规划抽题方案并落库为可作答试卷。
 
     流程：薄弱点聚合 → LLM 规划（内部已兜底，绝不因 LLM 异常而挂）→ 确定性建卷 → 返回不含答案的试卷 + 组卷说明。
+    LLM 规划通常十几秒，期间前端只能干等；需要阶段化进度时改用 /smart-generate/stream。
     """
-    uid = current_user["id"]
-
-    with conn.cursor() as cur:
-        weak = compute_weak_points(cur, uid)
-
-    available = [
-        {"code": c["code"], "name": c["name"]}
-        for c in get_categories(level=payload.level, examable_only=True)
-    ]
-
-    plan = plan_exam(payload.requirement, weak[:8], payload.level, available)
-
-    whole_exam = plan.get("whole_exam", False)
-    quotas = plan.get("category_quotas")
-    if quotas:
-        plans = [(code, cnt) for code, cnt in quotas.items()]
-    elif whole_exam:
-        # 整场组卷：单池不限量，靠 exam_date 筛出该场全部题组
-        plans = [(None, plan["total_questions"])]
-    else:
-        plans = [(None, plan["total_questions"])]
-
     try:
-        with conn.cursor() as cur:
-            result = build_exam(
-                cur,
-                level=plan["level"],
-                plans=plans,
-                difficulty_min=plan.get("difficulty_min"),
-                difficulty_max=plan.get("difficulty_max"),
-                time_limit=payload.time_limit_minutes,
-                user_id=uid,
-                exam_date=plan.get("exam_date"),
-                unlimited=whole_exam,
-            )
-            if not result["exam_id"]:
-                raise HTTPException(status_code=422, detail="没有符合条件的题目，请调整需求后再试")
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
+        result = run_smart_exam(
+            payload.requirement, payload.level, payload.time_limit_minutes,
+            current_user["id"], conn=conn,
+        )
+    except NoQuestionsError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     exam = _build_exam(conn, result["exam_id"])
     return SmartExamOut(
         **exam.model_dump(),
-        rationale=plan["rationale"],
+        rationale=result["plan"]["rationale"],
         shortfalls=result["shortfalls"],
+    )
+
+
+@router.get("/smart-generate/stream")
+async def smart_generate_stream(
+    requirement: str = Query(..., min_length=1, max_length=500, description="自然语言组卷需求"),
+    level: str | None = Query(default=None, description="目标级别 N1~N5，不传由 AI 决定"),
+    time_limit_minutes: int = Query(default=0, ge=0, le=180, description="限时（分钟），0 不限"),
+    token: str = Query(default="", description="JWT access_token（EventSource 不支持 Header，走 query）"),
+    conn=Depends(get_db),
+):
+    """AI 智能组卷的 SSE 版本：逐阶段推送进度，最后给出 exam_id。
+
+    组卷要串行跑「薄弱点聚合 → LLM 规划 → 抽题落库」，其中 LLM 一步就要十几秒。
+    这里把每一步的开始/结果推给前端，方案确定时先送出 rationale，用户能看到 AI
+    的组卷思路而不是干等转圈。前端收到 done 后再用 GET /exams/{id} 取试卷正文。
+    """
+    user_id = auth_by_query_token(token, conn)
+
+    async def gen():
+        async for event in stream_smart_exam(requirement, level, time_limit_minutes, user_id):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

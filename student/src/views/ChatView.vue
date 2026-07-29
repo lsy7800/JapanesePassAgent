@@ -2,9 +2,10 @@
 import { ref, nextTick, onMounted } from 'vue'
 import { marked } from 'marked'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Download, Plus, Delete, ChatLineRound } from '@element-plus/icons-vue'
+import { Download, Plus, Delete, ChatLineRound, Loading } from '@element-plus/icons-vue'
 import { chatStream, listSessions, getSessionMessages, deleteSession } from '../api/agent'
 import { downloadExam } from '../api/exam'
+import { toolLabel } from '../utils/toolLabels'
 
 const EXAMPLES = [
   '帮我出2道N1的题',
@@ -46,7 +47,6 @@ async function openSession(sid) {
     messages.value = rows.map((r) => ({
       role: r.role,
       content: r.content,
-      tools: [],
       exports: [],
     }))
     sessionId.value = sid
@@ -103,7 +103,9 @@ async function send(text) {
   messages.value.push({ role: 'user', content: msg })
   scrollBottom()
 
-  messages.value.push({ role: 'assistant', content: '', tools: [], exports: [], streaming: true })
+  messages.value.push({
+    role: 'assistant', content: '', stage: '', exports: [], streaming: true,
+  })
   streamingIdx = messages.value.length - 1
   sending.value = true
 
@@ -115,10 +117,11 @@ async function send(text) {
     },
     onToken(content) {
       messages.value[streamingIdx].content += content
+      messages.value[streamingIdx].stage = ''
       scrollBottom()
     },
     onTool(name, args) {
-      messages.value[streamingIdx].tools.push(name)
+      messages.value[streamingIdx].stage = toolLabel(name)
       // 捕获导出工具调用 → 渲染下载按钮（exam_id 来自工具参数，可靠）
       if (name === 'export_exam' && args && args.exam_id != null) {
         messages.value[streamingIdx].exports.push({
@@ -129,22 +132,30 @@ async function send(text) {
     },
     onDone(sid) {
       sessionId.value = sid
-      messages.value[streamingIdx].streaming = false
-      streamingIdx = -1
-      closeStream = null
-      sending.value = false
       scrollBottom()
       refreshSessions() // 刷新标题/排序
     },
-    onError(detail) {
-      messages.value[streamingIdx].streaming = false
-      messages.value[streamingIdx].error = true
+    onError(detail, kind) {
+      if (streamingIdx >= 0) messages.value[streamingIdx].error = true
+      // 网络中断的文案已自解释，服务端错误才加场景前缀
+      ElMessage.error(kind === 'network' ? detail : '对话失败：' + detail)
+    },
+    // 正常结束/出错/主动取消都会走到这里，状态复位收在一处，
+    // 避免 close() 后 streaming 残留为 true 导致输入框一直禁用
+    onClose() {
+      if (streamingIdx >= 0) {
+        messages.value[streamingIdx].streaming = false
+        messages.value[streamingIdx].stage = ''
+      }
       streamingIdx = -1
       closeStream = null
       sending.value = false
-      ElMessage.error('对话失败：' + detail)
     },
   })
+}
+
+function stopStream() {
+  closeStream?.()  // 触发 onClose('abort') 完成状态复位
 }
 
 function onKeydown(e) {
@@ -213,10 +224,10 @@ onMounted(refreshSessions)
             <div v-if="m.role === 'assistant'" class="md" v-html="renderMd(m.content)" />
             <span v-else>{{ m.content }}</span>
             <span v-if="m.streaming" class="cursor">▍</span>
-            <div v-if="m.tools && m.tools.length" class="tools">
-              <el-tag v-for="(t, ti) in m.tools" :key="ti" size="small" type="info" effect="plain">
-                🔧 {{ t }}
-              </el-tag>
+            <!-- 首 token 前显示当前在做什么；工具名对学生无意义，故映射成中文文案 -->
+            <div v-if="m.streaming && !m.content" class="waiting">
+              <el-icon class="is-loading"><Loading /></el-icon>
+              <span>{{ m.stage || '正在思考…' }}</span>
             </div>
             <!-- 导出下载按钮：来自 export_exam 工具调用 -->
             <div v-if="m.exports && m.exports.length" class="exports">
@@ -247,7 +258,8 @@ onMounted(refreshSessions)
           :disabled="sending"
           @keydown="onKeydown"
         />
-        <el-button type="primary" :loading="sending" class="send-btn" @click="send()">发送</el-button>
+        <el-button v-if="sending" class="send-btn" @click="stopStream">停止</el-button>
+        <el-button v-else type="primary" class="send-btn" @click="send()">发送</el-button>
       </div>
     </div>
   </div>
@@ -397,11 +409,13 @@ onMounted(refreshSessions)
   50%       { opacity: 0; }
 }
 
-.tools {
-  margin-top: 8px;
+/* 首 token 前的等待提示 */
+.waiting {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
+  font-size: 13px;
+  color: #b45309;
 }
 .exports {
   margin-top: 10px;

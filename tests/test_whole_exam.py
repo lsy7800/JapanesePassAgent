@@ -37,8 +37,9 @@ def seed_dated_bank(db):
 
 
 def _patch_plan(monkeypatch, plan):
+    # 打在编排层：同步与 SSE 两条路径都从这里取规划结果
     monkeypatch.setattr(
-        "backend.api.routers.exams.plan_exam",
+        "backend.services.smart_exam.plan_exam",
         lambda requirement, weak_points, level, available_categories: plan,
     )
 

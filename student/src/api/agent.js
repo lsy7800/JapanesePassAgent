@@ -1,5 +1,6 @@
 import http from './http'
 import { useAuthStore } from '../stores/auth'
+import { openSSE } from '../utils/sse'
 
 // 同步接口（保留，备用）
 export function chat(message, sessionId = null, context = null) {
@@ -33,42 +34,27 @@ export function deleteSession(sessionId) {
  *
  * @param {string}   message
  * @param {number|null} sessionId
- * @param {object}   callbacks  { onSession, onToken, onTool, onDone, onError }
- * @returns {function} close — 调用以提前关闭连接
+ * @param {object}   callbacks
+ *   { onSession, onToken, onTool, onDone, onError(detail, kind), onClose(reason) }
+ *   onError 的 kind 区分 'server'（服务端推的错误）与 'network'（连接中断）。
+ *   onClose 在正常结束/出错/主动取消时都会调用一次，适合统一复位 loading 状态。
+ * @returns {function} close — 调用以提前关闭连接（触发 onClose('abort')）
  */
 export function chatStream(message, sessionId, callbacks = {}) {
-  const { onSession, onToken, onTool, onDone, onError } = callbacks
+  const { onSession, onToken, onTool, onDone, onError, onClose } = callbacks
   const auth = useAuthStore()
 
   const params = new URLSearchParams({ message, token: auth.token || '' })
   if (sessionId) params.set('session_id', sessionId)
 
-  const url = `/api/v1/agent/stream?${params.toString()}`
-  const es = new EventSource(url)
-
-  es.onmessage = (e) => {
-    let payload
-    try { payload = JSON.parse(e.data) } catch { return }
-
-    if (payload.type === 'session') {
-      onSession?.(payload.session_id)
-    } else if (payload.type === 'token') {
-      onToken?.(payload.content)
-    } else if (payload.type === 'tool') {
-      onTool?.(payload.name, payload.args)
-    } else if (payload.type === 'done') {
-      es.close()
-      onDone?.(payload.session_id)
-    } else if (payload.type === 'error') {
-      es.close()
-      onError?.(payload.detail)
-    }
-  }
-
-  es.onerror = () => {
-    es.close()
-    onError?.('连接中断')
-  }
-
-  return () => es.close()
+  return openSSE(`/api/v1/agent/stream?${params.toString()}`, {
+    onEvent(payload) {
+      if (payload.type === 'session') onSession?.(payload.session_id)
+      else if (payload.type === 'token') onToken?.(payload.content)
+      else if (payload.type === 'tool') onTool?.(payload.name, payload.args)
+      else if (payload.type === 'done') onDone?.(payload.session_id)
+    },
+    onError,
+    onClose,
+  })
 }

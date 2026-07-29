@@ -2,8 +2,14 @@
 import { ref, reactive, computed, onUnmounted, watch, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Flag } from '@element-plus/icons-vue'
-import { generateExam, submitExam, getCategories, smartGenerateExam } from '../api/exam'
+import { Check, Flag, Loading } from '@element-plus/icons-vue'
+import {
+  generateExam,
+  submitExam,
+  getCategories,
+  getExam,
+  smartGenerateExamStream,
+} from '../api/exam'
 import { audioUrl } from '../utils/audio'
 
 const router = useRouter()
@@ -32,6 +38,31 @@ const ai = reactive({
 const rationale = ref('')
 const shortfalls = ref([])
 const showRationale = ref(true)
+
+// AI 组卷进度：逐阶段追加，供配置页展示「已完成/进行中」时间线
+// 每项 {key, message, state: 'doing'|'done'}
+const aiStages = ref([])
+const aiPlanSummary = ref('')
+let closeSmartStream = null
+
+/** 收尾/重置进度状态。keepStages=true 时保留时间线（出错后供用户回看卡在哪一步）。 */
+function resetAiProgress({ keepStages = false } = {}) {
+  closeSmartStream?.()
+  closeSmartStream = null
+  if (!keepStages) {
+    aiStages.value = []
+    aiPlanSummary.value = ''
+  }
+}
+
+/** 把新阶段推入时间线，并把上一个「进行中」标记为已完成。 */
+function pushStage(key, message) {
+  const list = aiStages.value
+  if (list.length && list[list.length - 1].state === 'doing') {
+    list[list.length - 1].state = 'done'
+  }
+  list.push({ key, message, state: 'doing' })
+}
 
 const config = reactive({
   level: 'N1',
@@ -296,32 +327,68 @@ async function onGenerate() {
   }
 }
 
-async function onSmartGenerate() {
+function onSmartGenerate() {
   const req = ai.requirement.trim()
   if (!req) {
     ElMessage.warning('请先描述你的组卷需求')
     return
   }
+
+  resetAiProgress()
   loading.value = true
-  try {
-    const data = await smartGenerateExam({
+
+  closeSmartStream = smartGenerateExamStream(
+    {
       requirement: req,
       level: ai.level || null,
       time_limit_minutes: ai.time_limit_minutes,
-    })
-    if (!data.total) {
-      ElMessage.warning('没有符合条件的题目，请调整需求')
-      return
-    }
-    rationale.value = data.rationale || ''
-    shortfalls.value = data.shortfalls || []
-    showRationale.value = true
-    await enterAnswering(data)
-  } catch (e) {
-    ElMessage.error('智能组卷失败：' + (e.response?.data?.detail || e.message))
-  } finally {
-    loading.value = false
-  }
+    },
+    {
+      onStage(e) {
+        pushStage(e.key, e.message)
+      },
+      // 方案确定时先亮出思路，用户不必等抽题落库
+      onPlan(e) {
+        aiPlanSummary.value = e.summary || ''
+        rationale.value = e.rationale || ''
+      },
+      async onDone(e) {
+        // 最后一个阶段收尾为已完成
+        const list = aiStages.value
+        if (list.length) list[list.length - 1].state = 'done'
+
+        rationale.value = e.rationale || rationale.value
+        shortfalls.value = e.shortfalls || []
+        showRationale.value = true
+        try {
+          const data = await getExam(e.exam_id)
+          resetAiProgress()
+          await enterAnswering(data)
+        } catch (err) {
+          ElMessage.error('试卷加载失败：' + (err.response?.data?.detail || err.message))
+        }
+      },
+      onError(detail, kind) {
+        ElMessage.error(
+          kind === 'network' ? detail : '智能组卷失败：' + detail,
+        )
+      },
+      onClose(reason) {
+        loading.value = false
+        closeSmartStream = null
+        // 出错时保留时间线，用户能看出卡在哪一步；主动取消则清空
+        if (reason === 'abort') {
+          aiStages.value = []
+          aiPlanSummary.value = ''
+        }
+      },
+    },
+  )
+}
+
+function onCancelSmartGenerate() {
+  resetAiProgress()
+  ElMessage.info('已取消组卷')
 }
 
 // 进入作答阶段：手动/智能组卷共用（倒计时、答题卡、防误退整套）
@@ -411,6 +478,7 @@ onUnmounted(() => {
   stopTimer()
   disarmGuards()
   teardownScrollSpy()
+  closeSmartStream?.()  // 离开页面时断开未完成的组卷流，避免连接泄漏
 })
 </script>
 
@@ -521,10 +589,39 @@ onUnmounted(() => {
         </el-form-item>
 
         <el-form-item>
-          <el-button type="primary" :loading="loading" style="width:100%" @click="onSmartGenerate">
+          <el-button
+            v-if="!loading"
+            type="primary"
+            style="width:100%"
+            @click="onSmartGenerate"
+          >
             AI 生成并开始
           </el-button>
+          <el-button v-else style="width:100%" @click="onCancelSmartGenerate">
+            取消组卷
+          </el-button>
         </el-form-item>
+
+        <!-- 组卷进度时间线：LLM 规划要十几秒，逐阶段反馈避免空白等待 -->
+        <div v-if="aiStages.length" class="ai-progress">
+          <div
+            v-for="(s, i) in aiStages"
+            :key="`${s.key}-${i}`"
+            class="ai-stage"
+            :class="s.state"
+          >
+            <span class="ai-stage-icon">
+              <el-icon v-if="s.state === 'done'"><Check /></el-icon>
+              <el-icon v-else class="is-loading"><Loading /></el-icon>
+            </span>
+            <span class="ai-stage-text">{{ s.message }}</span>
+          </div>
+          <div v-if="aiPlanSummary" class="ai-plan">
+            <div class="ai-plan-label">组卷方案</div>
+            <div class="ai-plan-body">{{ aiPlanSummary }}</div>
+            <div v-if="rationale" class="ai-plan-why">{{ rationale }}</div>
+          </div>
+        </div>
       </el-form>
     </el-card>
 
@@ -666,6 +763,41 @@ onUnmounted(() => {
 }
 .ai-example { cursor: pointer; transition: all 0.15s; }
 .ai-example:hover { border-color: #f59e0b; color: #b45309; }
+
+/* AI 组卷进度时间线 */
+.ai-progress {
+  margin-top: 4px;
+  padding: 12px 14px;
+  background: #fbf9f4;
+  border-radius: 8px;
+}
+.ai-stage {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 3px 0;
+  color: #909399;
+}
+.ai-stage.doing { color: #b45309; font-weight: 600; }
+.ai-stage.done { color: #67c23a; }
+.ai-stage-icon {
+  display: flex;
+  align-items: center;
+  height: 21px;   /* 与 13px×1.6 行高对齐，避免图标偏上 */
+  flex-shrink: 0;
+}
+.ai-stage-text { color: #606266; }
+.ai-stage.doing .ai-stage-text { color: #b45309; }
+.ai-plan {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #e4d9c3;
+}
+.ai-plan-label { font-size: 12px; color: #f59e0b; font-weight: 600; margin-bottom: 4px; }
+.ai-plan-body { font-size: 13px; font-weight: 600; color: #303133; }
+.ai-plan-why { font-size: 12px; color: #909399; line-height: 1.6; margin-top: 4px; }
 
 /* AI 组卷说明条 */
 .rationale-alert { margin-bottom: 14px; }

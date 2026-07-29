@@ -1,11 +1,13 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { Loading } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import { getResult } from '../api/exam'
 import { chatStream } from '../api/agent'
 import { audioUrl } from '../utils/audio'
+import { toolLabel } from '../utils/toolLabels'
 
 const props = defineProps({ id: { type: String, required: true } })
 const router = useRouter()
@@ -16,7 +18,63 @@ const accuracy = ref(0)
 const judgeState = ref({})
 const weakState = ref({ text: '', streaming: false, done: false, error: false })
 
-let closeCurrentStream = null
+// 等待超过这个时长仍无输出，补一句预期耗时，避免用户以为卡死
+const SLOW_HINT_MS = 8000
+
+// 当前活跃的流。EventSource.close() 不触发任何回调，所以必须自己记住
+// 「怎么复位面板」——否则被抢占的面板 streaming 永远为 true，按钮一直转圈。
+let active = null
+
+/** 关闭当前流并复位其面板状态。 */
+function stopActive() {
+  if (!active) return
+  const cur = active
+  active = null
+  clearTimeout(cur.slowTimer)
+  cur.close?.()
+  cur.reset?.()
+}
+
+/**
+ * 接管一个面板的流式请求：统一处理阶段提示、慢响应兜底、错误与收尾。
+ * @param {object} st  面板响应式状态对象
+ * @param {string} message  发给 Agent 的指令
+ * @param {string} failHint  错误提示前缀
+ */
+function runStream(st, message, failHint) {
+  const rec = { reset: () => { st.streaming = false } }
+  active = rec
+
+  // 首 token 迟迟不来时补一句预期耗时
+  rec.slowTimer = setTimeout(() => {
+    if (st.streaming && !st.text) st.slow = true
+  }, SLOW_HINT_MS)
+
+  rec.close = chatStream(message, null, {
+    onTool(name) {
+      st.stage = toolLabel(name)
+    },
+    onToken(content) {
+      st.text += content
+      st.stage = ''
+      st.slow = false
+    },
+    onError(detail, kind) {
+      st.error = true
+      // 网络中断的文案已足够自解释，服务端错误则加上场景前缀
+      st.errorMsg = kind === 'network' ? detail : `${failHint}：${detail}`
+    },
+    onClose(reason) {
+      clearTimeout(rec.slowTimer)
+      st.streaming = false
+      st.stage = ''
+      st.slow = false
+      if (reason === 'done') st.done = true
+      if (active === rec) active = null
+    },
+  })
+  return rec.close
+}
 
 // 渲染题干：划线词标金色下划线（先转义防 XSS）
 function renderContent(content, marked) {
@@ -97,7 +155,7 @@ async function load() {
 
 function judgeItem(item, q) {
   if (judgeState.value[q.no]?.streaming) return
-  closeCurrentStream?.()
+  stopActive()
 
   const opts = {}
   for (const o of q.options) opts[o.label] = o.content
@@ -113,49 +171,28 @@ ${ctx}题目：${q.content || '（见文章空格）'}
 我的答案：${q.user_answer || '未作答'}
 解析参考：${q.analysis || '无'}`
 
-  judgeState.value[q.no] = { text: '', streaming: true, error: false }
-
-  closeCurrentStream = chatStream(message, null, {
-    onToken(content) { judgeState.value[q.no].text += content },
-    onDone() {
-      judgeState.value[q.no].streaming = false
-      closeCurrentStream = null
-    },
-    onError(detail) {
-      judgeState.value[q.no].streaming = false
-      judgeState.value[q.no].error = true
-      ElMessage.error('AI 解析失败：' + detail)
-      closeCurrentStream = null
-    },
+  // 用 reactive 对象持有面板状态，交给 runStream 统一更新
+  judgeState.value[q.no] = reactive({
+    text: '', streaming: true, done: false, error: false, errorMsg: '', stage: '', slow: false,
   })
+  runStream(judgeState.value[q.no], message, 'AI 解析失败')
 }
 
 function analyzeWeak() {
   if (weakState.value.streaming) return
-  closeCurrentStream?.()
-  weakState.value = { text: '', streaming: true, done: false, error: false }
-
-  closeCurrentStream = chatStream(
+  stopActive()
+  weakState.value = reactive({
+    text: '', streaming: true, done: false, error: false, errorMsg: '', stage: '', slow: false,
+  })
+  runStream(
+    weakState.value,
     `请用 analyze_weak_points 工具分析试卷 ${props.id} 的薄弱知识点`,
-    null,
-    {
-      onToken(content) { weakState.value.text += content },
-      onDone() {
-        weakState.value.streaming = false
-        weakState.value.done = true
-        closeCurrentStream = null
-      },
-      onError(detail) {
-        weakState.value.streaming = false
-        weakState.value.error = true
-        ElMessage.error('薄弱点分析失败：' + detail)
-        closeCurrentStream = null
-      },
-    },
+    '薄弱点分析失败',
   )
 }
 
 onMounted(load)
+onUnmounted(stopActive)  // 离开页面时断开未完成的流，避免连接泄漏
 </script>
 
 <template>
@@ -199,17 +236,26 @@ onMounted(load)
             <el-tag :type="q.is_correct ? 'success' : 'danger'" size="small">
               {{ q.is_correct ? '正确' : '错误' }}
             </el-tag>
-            <el-button
-              v-if="!q.is_correct"
-              size="small"
-              type="primary"
-              plain
-              :loading="judgeState[q.no]?.streaming"
-              class="ai-btn"
-              @click="judgeItem(item, q)"
-            >
-              {{ judgeState[q.no]?.text ? '重新解析' : 'AI 解析' }}
-            </el-button>
+            <template v-if="!q.is_correct">
+              <el-button
+                v-if="judgeState[q.no]?.streaming"
+                size="small"
+                class="ai-btn"
+                @click="stopActive"
+              >
+                停止
+              </el-button>
+              <el-button
+                v-else
+                size="small"
+                type="primary"
+                plain
+                class="ai-btn"
+                @click="judgeItem(item, q)"
+              >
+                {{ judgeState[q.no]?.text ? '重新解析' : 'AI 解析' }}
+              </el-button>
+            </template>
           </div>
 
           <div v-if="q.content" class="q-content" v-html="renderContent(q.content, q.marked)"></div>
@@ -233,10 +279,34 @@ onMounted(load)
           <div v-if="!q.user_answer" class="unanswered">（未作答）</div>
           <div v-if="q.analysis" class="analysis">{{ q.analysis }}</div>
 
-          <div v-if="judgeState[q.no]?.text || judgeState[q.no]?.streaming" class="ai-analysis">
+          <div
+            v-if="judgeState[q.no]?.text || judgeState[q.no]?.streaming || judgeState[q.no]?.error"
+            class="ai-analysis"
+          >
             <div class="ai-label">🤖 AI 解析</div>
-            <div class="md" v-html="renderJudge(judgeState[q.no].text)" />
-            <span v-if="judgeState[q.no]?.streaming" class="cursor">▍</span>
+
+            <!-- 首 token 前：阶段提示 + 骨架屏，替代此前的空白面板 -->
+            <div v-if="judgeState[q.no].streaming && !judgeState[q.no].text" class="ai-waiting">
+              <div class="ai-stage-line">
+                <el-icon class="is-loading"><Loading /></el-icon>
+                <span>{{ judgeState[q.no].stage || '正在准备解析…' }}</span>
+              </div>
+              <div v-if="judgeState[q.no].slow" class="ai-slow-hint">
+                模型正在逐句处理，通常需要 10~30 秒，可以先看看其他题目
+              </div>
+              <el-skeleton :rows="3" animated class="ai-skeleton" />
+            </div>
+
+            <div v-if="judgeState[q.no].text" class="md" v-html="renderJudge(judgeState[q.no].text)" />
+            <span v-if="judgeState[q.no].streaming && judgeState[q.no].text" class="cursor">▍</span>
+
+            <!-- 出错：保留已收到的部分内容，并给重试入口 -->
+            <div v-if="judgeState[q.no].error" class="ai-error">
+              <span class="ai-error-msg">{{ judgeState[q.no].errorMsg }}</span>
+              <el-button size="small" type="primary" plain @click="judgeItem(item, q)">
+                重试
+              </el-button>
+            </div>
           </div>
         </div>
       </el-card>
@@ -246,14 +316,17 @@ onMounted(load)
         <template #header>
           <div class="weak-head">
             <span>📊 薄弱点分析</span>
+            <el-button v-if="weakState.streaming" size="small" @click="stopActive">
+              停止
+            </el-button>
             <el-button
+              v-else
               type="primary"
               size="small"
-              :loading="weakState.streaming"
               :disabled="result.score === result.total"
               @click="analyzeWeak"
             >
-              {{ weakState.done ? '重新分析' : '开始分析' }}
+              {{ weakState.done || weakState.text ? '重新分析' : '开始分析' }}
             </el-button>
           </div>
         </template>
@@ -261,12 +334,32 @@ onMounted(load)
         <div v-if="result.score === result.total" class="weak-perfect">
           全部答对，没有薄弱点 🎉
         </div>
-        <div v-else-if="!weakState.text && !weakState.streaming" class="weak-empty">
+        <div
+          v-else-if="!weakState.text && !weakState.streaming && !weakState.error"
+          class="weak-empty"
+        >
           点击「开始分析」，AI 将根据错题分析你的知识薄弱点
         </div>
         <div v-else>
-          <div class="md" v-html="renderMd(weakState.text)" />
-          <span v-if="weakState.streaming" class="cursor">▍</span>
+          <!-- 首 token 前：阶段提示 + 骨架屏 -->
+          <div v-if="weakState.streaming && !weakState.text" class="ai-waiting">
+            <div class="ai-stage-line">
+              <el-icon class="is-loading"><Loading /></el-icon>
+              <span>{{ weakState.stage || '正在准备分析…' }}</span>
+            </div>
+            <div v-if="weakState.slow" class="ai-slow-hint">
+              正在归纳全卷错题，通常需要 10~30 秒
+            </div>
+            <el-skeleton :rows="4" animated class="ai-skeleton" />
+          </div>
+
+          <div v-if="weakState.text" class="md" v-html="renderMd(weakState.text)" />
+          <span v-if="weakState.streaming && weakState.text" class="cursor">▍</span>
+
+          <div v-if="weakState.error" class="ai-error">
+            <span class="ai-error-msg">{{ weakState.errorMsg }}</span>
+            <el-button size="small" type="primary" plain @click="analyzeWeak">重试</el-button>
+          </div>
         </div>
       </el-card>
     </template>
@@ -433,6 +526,35 @@ onMounted(load)
   border-radius: 0 6px 6px 0;
 }
 .ai-label { font-size: 12px; color: #f59e0b; font-weight: 600; margin-bottom: 6px; }
+
+/* 首 token 前的等待区：阶段提示 + 骨架屏 */
+.ai-stage-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #b45309;
+  font-weight: 600;
+}
+.ai-slow-hint {
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+.ai-skeleton { margin-top: 10px; }
+
+/* 出错提示：保留已收到的内容，附重试入口 */
+.ai-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #e4d9c3;
+}
+.ai-error-msg { font-size: 13px; color: #f56c6c; flex: 1; min-width: 180px; }
 
 .weak-card { margin-top: 20px; }
 .weak-head { display: flex; align-items: center; justify-content: space-between; }

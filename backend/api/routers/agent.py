@@ -7,29 +7,11 @@ SSE 端点使用 token query 参数认证（EventSource 不支持自定义请求
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from jose import JWTError
 
-from backend.api.deps import get_current_user, get_db
+from backend.api.deps import auth_by_query_token, get_current_user, get_db
 from backend.schemas.agent import ChatRequest, ChatResponse, ToolCall
-from backend.utils.security import decode_token
 
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
-
-
-def _auth_by_token(token: str, conn) -> int:
-    """SSE 专用：从 query param token 解析用户，返回 user_id，失败抛 HTTPException。"""
-    if not token:
-        raise HTTPException(status_code=401, detail="未登录")
-    try:
-        payload = decode_token(token)
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Token 无效或已过期")
-    user_id = int(payload["sub"])
-    with conn.cursor() as cur:
-        cur.execute("SELECT id FROM users WHERE id = %s", (user_id,))
-        if not cur.fetchone():
-            raise HTTPException(status_code=401, detail="用户不存在")
-    return user_id
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -56,7 +38,7 @@ async def stream(
     conn=Depends(get_db),
 ):
     """SSE 流式对话接口。"""
-    user_id = _auth_by_token(token, conn)
+    user_id = auth_by_query_token(token, conn)
     from backend.agent.graph import stream_agent
 
     return StreamingResponse(
