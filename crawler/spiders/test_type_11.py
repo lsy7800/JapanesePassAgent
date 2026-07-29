@@ -1,3 +1,4 @@
+import copy
 import re
 from lxml import etree
 from crawler.spiders.spider import Spider
@@ -72,20 +73,22 @@ class TestType11(Spider):
             if txt:
                 lines.append(f"<caption>{txt}</caption>")
 
-        thead = table_el.find(".//thead")
-        tbody = table_el.find(".//tbody")
+        def _all_th(tr):
+            cells = [c for c in tr if c.tag in ("td", "th")]
+            return bool(cells) and all(c.tag == "th" for c in cells)
+
+        # 一律按文档顺序取全部 <tr>，不依赖 thead/tbody 容器：
+        # 源站的表格结构很不规范——有的把所有行都塞进 <thead>（含纯 <td> 数据行），
+        # 有的一行一个 <tbody>（#15 有 6 个 tbody）。按容器取行会漏掉大半数据。
         all_trs = table_el.findall(".//tr")
 
-        if thead is not None:
-            lines.append("<thead>" + "".join(_tr_html(tr, True) for tr in thead.findall(".//tr")) + "</thead>")
-            body_trs = tbody.findall(".//tr") if tbody is not None else []
-        else:
-            first = all_trs[0] if all_trs else None
-            if first is not None and all(td.tag == "th" for td in first):
-                lines.append("<thead>" + _tr_html(first, True) + "</thead>")
-                body_trs = all_trs[1:]
-            else:
-                body_trs = all_trs
+        # 表头 = 开头连续的「全 th」行；遇到第一个含 td 的行就进数据区。
+        cut = 0
+        while cut < len(all_trs) and _all_th(all_trs[cut]):
+            cut += 1
+        if cut:
+            lines.append("<thead>" + "".join(_tr_html(tr, True) for tr in all_trs[:cut]) + "</thead>")
+        body_trs = all_trs[cut:]
 
         body = "".join(_tr_html(tr) for tr in body_trs)
         if body:
@@ -93,9 +96,82 @@ class TestType11(Spider):
 
         return '<table class="info-table">' + "".join(lines) + "</table>"
 
+    @staticmethod
+    def _unwrap_layout_tables(root):
+        """就地拆掉「排版用表格」——即内部还套着表格的外层表。
+
+        源站有的题（如 #9）用一个 1 行 2 列的表把「注意事项」和真正的数据表并排摆放，
+        外层表不承载任何语义，只是排版。而嵌套表格有两个害处：
+          1. 前端 renderArticle 用非贪婪正则 /<table[\\s\\S]*?<\\/table>/ 抠表格保护，
+             遇嵌套会在内层 </table> 处截断，外层剩下的部分被当普通文本转义 → 标签裸露；
+          2. 语义上该拆——外层是排版，内层才是数据。
+        故把外层表替换成一个 <div>，各单元格内容依次变成 <p>（后续序列化为换行），
+        内层真表格留在树里照常处理。反复执行直到不再有嵌套。
+        """
+        for _ in range(5):  # 防御性上限，正常一两轮即收敛
+            nested = [t for t in root.xpath(".//table") if t.xpath(".//table")]
+            if not nested:
+                return
+            for t in nested:
+                parent = t.getparent()
+                if parent is None:
+                    continue
+                holder = etree.Element("div")
+                # 只取归属于本表的单元格（不含内层表的单元格）
+                for cell in t.xpath(".//td|.//th"):
+                    owner = cell.xpath("ancestor::table[1]")
+                    if not owner or owner[0] is not t:
+                        continue
+                    para = etree.Element("p")
+                    para.text = cell.text
+                    for ch in list(cell):
+                        para.append(ch)  # 移动子节点（含内层 <table>）
+                    holder.append(para)
+                holder.tail = t.tail
+                parent.replace(t, holder)
+
+    @classmethod
+    def _el_text_keep_tables(cls, el):
+        """把带边框的块序列化成文本，但**保留其中的表格**为 HTML。
+
+        源站大量题目把 <table> 放在 border-style:solid 的 <div> 里（募集要项、料金表等）。
+        若直接用 _el_text() 整块转文本，后代 <table> 的标签会被一并剥掉，表格塌成一行文字。
+        这里先把每个后代表格换成哨兵占位符、其余部分照常转文本，最后把占位符还原成表格 HTML。
+
+        前端 renderArticle 先抠出 <table> 保护再处理 【BOX】，所以 BOX 内嵌表格能正常渲染。
+        """
+        work = copy.deepcopy(el)
+        cls._unwrap_layout_tables(work)
+        tables = []
+        # 哨兵只用字母数字：lxml 文本节点不接受控制字符，且 _el_text 会压缩空白，
+        # 纯字母数字的标记能原样穿过序列化。源文是日文，不会与正文冲突。
+        for t in reversed(work.xpath(".//table")):
+            parent = t.getparent()
+            if parent is None:
+                continue
+            # 无 <tr> 的畸形表当排版框，留在树里按文本序列化（与 _article_text 一致）
+            if not t.xpath(".//tr"):
+                continue
+            tables.append(cls._table_to_html(t))
+            holder = etree.Element("span")
+            holder.text = f"ZTBLZ{len(tables) - 1}ZENDZ"
+            holder.tail = t.tail
+            parent.replace(t, holder)
+
+        s = cls._el_text(work)
+        # 哨兵两侧补换行，保证表格独占一块、不与相邻文字黏连
+        for i, html in enumerate(tables):
+            s = s.replace(f"ZTBLZ{i}ZENDZ", f"\n{html}\n")
+        s = re.sub(r"\n{2,}", "\n", s)
+        return s.strip()
+
     @classmethod
     def _article_text(cls, span_el):
         """序列化 span.con：递归处理所有子元素，直接输出 HTML 表格，其余转文本。"""
+        # 先在副本上拆掉排版用的嵌套表格，再遍历——嵌套表格会让前端抠表格的
+        # 非贪婪正则截断，且外层表本身无语义。副本避免污染调用方的 DOM。
+        span_el = copy.deepcopy(span_el)
+        cls._unwrap_layout_tables(span_el)
         parts = []
 
         def _walk(el):
@@ -103,7 +179,15 @@ class TestType11(Spider):
             style = el.get("style", "")
 
             if tag == "table":
-                parts.append(cls._table_to_html(el))
+                # 无 <tr> 的表（源站有畸形写法：<table> 里直接放一个 <td>，
+                # 当单元格排版框用，如 #15 的联系方式块）不是表格数据，
+                # 按文本处理；否则会产出空的 <table></table>、内容全丢。
+                if el.xpath(".//tr"):
+                    parts.append(cls._table_to_html(el))
+                else:
+                    txt = cls._el_text(el)
+                    if txt:
+                        parts.append(txt)
                 return
 
             if tag in ("h1", "h2", "h3", "h4"):
@@ -113,7 +197,9 @@ class TestType11(Spider):
                 return
 
             if "border-style" in style and "solid" in style:
-                parts.append("【BOX】\n" + cls._el_text(el) + "\n【/BOX】")
+                # 用保留表格的序列化：该块内常嵌 <table>（料金表/募集要项），
+                # 整块转纯文本会把表格标签一并剥掉，表格塌成一行文字。
+                parts.append("【BOX】\n" + cls._el_text_keep_tables(el) + "\n【/BOX】")
                 return
 
             # 普通元素：先输出自身直接文本，再递归子元素
