@@ -47,11 +47,13 @@ def _select_group_ids(
     cur, *, level: str | None, category: str | None,
     difficulty_min: int | None, difficulty_max: int | None, count: int,
     exam_date: str | None = None,
+    exclude_listening: bool = False,
 ) -> list[int]:
     """从题库单池随机抽 count 个题组 id（库存不足则返回实际数量）。
 
     exam_date：按年月前缀匹配（如 "2010-07"），用于按整场考试组卷；exam_date 字段前 7 位
     统一为 YYYY-MM，故用前缀匹配即可跨 "2010-07" / "2010-07-N1（1）" 等格式。
+    exclude_listening：排除听力题组。听力需播放音频，导出打印或纯笔试场景下必须剔除。
     """
     where, params = [], []
     if level:
@@ -69,6 +71,8 @@ def _select_group_ids(
     if exam_date:
         where.append("exam_date LIKE %s")
         params.append(f"{exam_date}%")
+    if exclude_listening:
+        where.append("type <> 'listening'")
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     cur.execute(
         f"SELECT id FROM question_groups {where_sql} ORDER BY RAND() LIMIT %s",
@@ -86,13 +90,15 @@ def build_exam(
     user_id: int | None = None,
     exam_date: str | None = None,
     unlimited: bool = False,
+    exclude_listening: bool = False,
 ) -> dict:
     """按题型配额抽题并落库。
 
     plans: [(category|None, count), ...]，按顺序逐段抽题，题型间保持顺序、段内随机。
     exam_date: 按年月前缀（如 "2010-07"）筛选整场考试题目，可与题型/难度叠加。
     unlimited: 整场组卷模式，绕过单段 MAX_PER_PLAN 上限（该场有多少题组就抽多少）。
-    返回 {exam_id, total, shortfalls}；无题可抽时 exam_id 为 None。
+    exclude_listening: 排除听力题组（导出打印、纯笔试场景）。
+    返回 {exam_id, total, shortfalls}；total 为可评分子题数，无题可抽时 exam_id 为 None。
     """
     ordered_ids: list[int] = []
     shortfalls: list[str] = []
@@ -103,7 +109,7 @@ def build_exam(
         got = _select_group_ids(
             cur, level=level, category=cat,
             difficulty_min=difficulty_min, difficulty_max=difficulty_max, count=cnt,
-            exam_date=exam_date,
+            exam_date=exam_date, exclude_listening=exclude_listening,
         )
         ordered_ids.extend(got)
         if len(got) < cnt and not unlimited:
@@ -120,7 +126,17 @@ def build_exam(
     exam_id = persist_exam(
         cur, level=level, group_ids=ordered_ids, time_limit=time_limit, user_id=user_id,
     )
-    return {"exam_id": exam_id, "total": len(ordered_ids), "shortfalls": shortfalls}
+    # total 取 persist_exam 落库的可评分子题数，而非题组数——阅读一篇文章可含多问，
+    # 两者不等。回查而非重算，保证与 exam_items 的行数严格一致。
+    cur.execute("SELECT total FROM exams WHERE id = %s", (exam_id,))
+    row = cur.fetchone()
+    total = row["total"] if row else len(ordered_ids)
+    return {
+        "exam_id": exam_id,
+        "total": total,
+        "groups": len(ordered_ids),
+        "shortfalls": shortfalls,
+    }
 
 
 def _order_by_exam_layout(cur, group_ids: list[int]) -> list[int]:

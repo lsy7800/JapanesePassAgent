@@ -16,7 +16,8 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
 from crawler.config import DB_CONFIG, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, require
-from backend.config.categories import category_name
+from backend.services.exam_builder import build_exam
+from backend.services.exam_planner import WHOLE_EXAM_CAP
 
 
 def _connect():
@@ -130,9 +131,12 @@ def generate_exam(
     total_questions: int = 10,
     difficulty_min: int | None = None,
     difficulty_max: int | None = None,
+    exam_date: str | None = None,
+    whole_exam: bool = False,
+    exclude_listening: bool = False,
     user_id: int | None = None,
 ) -> dict:
-    """智能组卷：按条件随机抽题生成【一套】试卷并落库，返回试卷ID与题目列表（不含答案）。
+    """智能组卷：按条件抽题生成【一套】试卷并落库，返回试卷ID与题目列表（不含答案）。
 
     参数：
     - level: 级别 N1~N5
@@ -142,75 +146,79 @@ def generate_exam(
       传了 category_quotas 时，忽略 category 与 total_questions。
     - total_questions: 题目数，默认 10，最多 50（仅单题型/无题型时生效）
     - difficulty_min/difficulty_max: 难度区间 0-9
-    - user_id: 当前用户ID（由 Agent 调用方注入，用于关联考试历史）
+    - exam_date: 考试场次年月，形如 "2022-07"。用户要「某年某月的真题」时传此参数，
+      配合 whole_exam=True 可出该场完整试卷。
+    - whole_exam: 整场真题模式。为 True 时不限题量，抽出该场次全部题目并还原标准卷面顺序
+      （文字词汇→语法→阅读）。要「一整套/整场真题」时用，须同时传 exam_date。
+    - exclude_listening: 排除听力题。用户说「不含听力/只要笔试/要打印」时传 True——
+      听力题需播放音频，纸面场景下无意义。
+    - user_id: 当前用户ID（由系统注入，见系统提示；缺失则无法关联考试历史与下载）
 
-    返回 {exam_id, total, items}，items 每题含 seq、题干、选项（不含答案）。
+    返回 {exam_id, total, groups, items}：total 为可评分题数（阅读一篇多问会展开成多题），
+    groups 为题组数，items 每题含 seq、题干、选项（不含答案）。
     用户做完后可通过 exam_id 提交判分；也可用 export_exam 导出为一份文件。
     """
-    base_where, base_params = [], []
-    if level:
-        base_where.append("level = %s")
-        base_params.append(level)
-    if difficulty_min is not None:
-        base_where.append("difficulty >= %s")
-        base_params.append(difficulty_min)
-    if difficulty_max is not None:
-        base_where.append("difficulty <= %s")
-        base_params.append(difficulty_max)
+    # user_id 缺失会写出一张归属为 NULL 的卷——后续下载会因归属校验失败而 403。
+    # 与其静默产出一张不可用的卷，不如直接报错让模型补上。
+    if user_id is None:
+        return {
+            "exam_id": None,
+            "total": 0,
+            "items": [],
+            "message": "缺少 user_id，无法组卷。请使用系统提示中提供的 user_id 重新调用。",
+        }
+    # 整场模式下单段不限量，靠 exam_date 收窄题池；否则按 MAX_PER_PLAN 封顶
+    cap = WHOLE_EXAM_CAP if whole_exam else 50
 
     # 组装抽题计划：[(category|None, count), ...]
     plans: list[tuple[str | None, int]] = []
     if category_quotas:
         for cat, cnt in category_quotas.items():
-            n = max(0, min(int(cnt), 50))
+            n = max(0, min(int(cnt), cap))
             if n:
                 plans.append((cat, n))
     elif category:
-        plans.append((category, max(1, min(total_questions, 50))))
+        plans.append((category, max(1, min(total_questions, cap))))
     else:
-        plans.append((None, max(1, min(total_questions, 50))))
+        plans.append((None, cap if whole_exam else max(1, min(total_questions, cap))))
 
     conn = _connect()
     try:
         with conn.cursor() as cur:
-            # 按题型分别抽题，保持配额内随机、题型间顺序排列
-            ordered_ids: list[int] = []
-            shortfalls: list[str] = []
-            for cat, cnt in plans:
-                where = list(base_where)
-                params = list(base_params)
-                if cat:
-                    where.append("category = %s")
-                    params.append(cat)
-                where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-                cur.execute(
-                    f"SELECT id FROM question_groups {where_sql} ORDER BY RAND() LIMIT %s",
-                    params + [cnt],
-                )
-                got = [r["id"] for r in cur.fetchall()]
-                ordered_ids.extend(got)
-                if len(got) < cnt:
-                    label = category_name(cat) if cat else "全部"
-                    shortfalls.append(f"{label}：需 {cnt} 题，实际 {len(got)} 题")
-
-            if not ordered_ids:
-                return {"exam_id": None, "total": 0, "items": [], "message": "没有符合条件的题目"}
-
-            cur.execute(
-                "INSERT INTO exams (user_id, level, total, time_limit, status) VALUES (%s, %s, %s, 0, 'created')",
-                (user_id, level or "", len(ordered_ids)),
+            # 复用共享建卷服务：它负责按 questions.seq 把题组展开成逐子题的 exam_items
+            # （阅读一篇多问会展开成多行），并按标准卷面顺序排列整场卷。
+            # 早先这里自建了一套 SQL，漏写 sub_seq 导致多问题组只登记 1 题、导出静默少题。
+            built = build_exam(
+                cur,
+                level=level,
+                plans=plans,
+                difficulty_min=difficulty_min,
+                difficulty_max=difficulty_max,
+                time_limit=0,
+                user_id=user_id,
+                exam_date=exam_date,
+                unlimited=whole_exam,
+                exclude_listening=exclude_listening,
             )
-            exam_id = cur.lastrowid
+            if not built["exam_id"]:
+                return {
+                    "exam_id": None, "total": 0, "items": [],
+                    "message": "没有符合条件的题目，请调整级别/题型/场次等条件",
+                }
+
+            exam_id = built["exam_id"]
+            # 按 exam_items 逐子题列出题面，与落库的可评分题号严格对应
+            cur.execute(
+                "SELECT seq, group_id, sub_seq FROM exam_items WHERE exam_id = %s ORDER BY seq",
+                (exam_id,),
+            )
+            rows = cur.fetchall()
 
             items = []
-            for seq, gid in enumerate(ordered_ids, start=1):
+            for r in rows:
                 cur.execute(
-                    "INSERT INTO exam_items (exam_id, seq, group_id) VALUES (%s, %s, %s)",
-                    (exam_id, seq, gid),
-                )
-                cur.execute(
-                    "SELECT id, content FROM questions WHERE group_id = %s ORDER BY seq LIMIT 1",
-                    (gid,),
+                    "SELECT id, content FROM questions WHERE group_id = %s AND seq = %s LIMIT 1",
+                    (r["group_id"], r["sub_seq"]),
                 )
                 q = cur.fetchone()
                 options = {}
@@ -221,14 +229,19 @@ def generate_exam(
                     )
                     options = {o["label"]: o["content"] for o in cur.fetchall()}
                 items.append({
-                    "seq": seq,
+                    "seq": r["seq"],
                     "content": q["content"] if q else None,
                     "options": options,
                 })
         conn.commit()
-        result = {"exam_id": exam_id, "total": len(ordered_ids), "items": items}
-        if shortfalls:
-            result["message"] = "部分题型库存不足：" + "；".join(shortfalls)
+        result = {
+            "exam_id": exam_id,
+            "total": built["total"],
+            "groups": built["groups"],
+            "items": items,
+        }
+        if built["shortfalls"]:
+            result["message"] = "部分题型库存不足：" + "；".join(built["shortfalls"])
         return result
     except Exception:
         conn.rollback()

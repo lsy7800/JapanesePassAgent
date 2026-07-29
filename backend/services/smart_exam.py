@@ -159,12 +159,13 @@ async def stream_smart_exam(
         yield {"type": "stage", "key": "build", "message": "正在从题库抽题、生成试卷…"}
         result = await asyncio.to_thread(_build, plan, time_limit, user_id)
 
-        # groups 是题组数，不等于可评分子题数（阅读一篇文章可含多问）；
-        # 真实题量由前端随后 GET /exams/{id} 取回的 total 决定，此处仅作进度信息。
+        # groups=题组数，total=可评分子题数（阅读一篇文章可含多问，两者不等）。
+        # 两个都给出，前端不必再猜哪个是真实题量。
         yield {
             "type": "done",
             "exam_id": result["exam_id"],
-            "groups": result["total"],
+            "groups": result["groups"],
+            "total": result["total"],
             "rationale": plan["rationale"],
             "shortfalls": result["shortfalls"],
         }
