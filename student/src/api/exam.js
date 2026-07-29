@@ -84,9 +84,19 @@ export function getWrongQuestions(payload = {}) {
 }
 
 // ── 试卷导出（带 JWT 拉 blob，触发浏览器下载，token 不进 URL）──
-export async function downloadExam(examId, { withAnswers = false } = {}) {
+/**
+ * @param {number} examId
+ * @param {object} opts
+ *   - mode: 'questions' 仅题目 | 'with_answers' 题目+答案 | 'answers_only' 只有答案
+ *   - withAnswers: 旧参数，未传 mode 时生效（true 等价于 with_answers）
+ */
+export async function downloadExam(examId, { mode, withAnswers = false } = {}) {
+  const params = { format: 'markdown' }
+  if (mode) params.mode = mode
+  else params.with_answers = withAnswers
+
   const res = await http.get(`/exams/${examId}/export`, {
-    params: { format: 'markdown', with_answers: withAnswers },
+    params,
     responseType: 'blob',
   })
   // 从 Content-Disposition 解析文件名，回退到默认名

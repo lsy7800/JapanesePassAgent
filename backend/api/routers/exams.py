@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 
 from backend.api.deps import auth_by_query_token, get_db, get_current_user
-from backend.api.exam_export import render_exam_markdown
+from backend.api.exam_export import VALID_MODES, render_exam_markdown
 from backend.services.exam_builder import persist_exam
 from backend.services.smart_exam import NoQuestionsError, run_smart_exam, stream_smart_exam
 from backend.schemas.exam import (
@@ -385,16 +385,27 @@ def export_exam(
     exam_id: int,
     format: str = "markdown",
     with_answers: bool = False,
+    mode: str | None = None,
     conn=Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """导出试卷为可下载文件。当前支持 format=markdown。
 
-    with_answers=False 仅题目卷；True 追加「答案与解析」一节。
+    mode（推荐）：
+    - questions      仅题目卷
+    - with_answers   题目卷 + 「答案与解析」一节
+    - answers_only   只有答案与解析，不含题目（对答案、批改用）
+
+    with_answers 为兼容旧前端保留：未传 mode 时 True→with_answers、False→questions。
     需为试卷所有者。前端用带 JWT 的请求拉取，作为附件下载。
     """
     if format != "markdown":
         raise HTTPException(status_code=400, detail=f"暂不支持的导出格式：{format}")
+    if mode is not None and mode not in VALID_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"未知导出模式：{mode}（可选 {'/'.join(VALID_MODES)}）",
+        )
 
     with conn.cursor() as cur:
         cur.execute("SELECT user_id FROM exams WHERE id = %s", (exam_id,))
@@ -404,7 +415,9 @@ def export_exam(
         if exam["user_id"] != current_user["id"]:
             raise HTTPException(status_code=403, detail="无权访问该试卷")
 
-        rendered = render_exam_markdown(cur, exam_id, with_answers=with_answers)
+        rendered = render_exam_markdown(
+            cur, exam_id, with_answers=with_answers, mode=mode
+        )
 
     if rendered is None:
         raise HTTPException(status_code=404, detail=f"试卷 {exam_id} 不存在")

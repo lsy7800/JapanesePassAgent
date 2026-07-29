@@ -234,13 +234,43 @@ def _card_heading(card: dict) -> str:
     return head
 
 
-def render_exam_markdown(cursor, exam_id: int, with_answers: bool = False) -> tuple[str, str] | None:
+# 导出模式。answers_only 供「只要一份答案」的场景（对答案、教师批改），
+# 此前只有前两种，模型想满足「一份只有答案」只能退而给出两份含答案的卷。
+MODE_QUESTIONS = "questions"
+MODE_WITH_ANSWERS = "with_answers"
+MODE_ANSWERS_ONLY = "answers_only"
+VALID_MODES = (MODE_QUESTIONS, MODE_WITH_ANSWERS, MODE_ANSWERS_ONLY)
+
+_MODE_TITLE = {
+    MODE_QUESTIONS: "练习试卷",
+    MODE_WITH_ANSWERS: "练习试卷（含答案）",
+    MODE_ANSWERS_ONLY: "答案与解析",
+}
+_MODE_SUFFIX = {
+    MODE_QUESTIONS: "",
+    MODE_WITH_ANSWERS: "_答案",
+    MODE_ANSWERS_ONLY: "_仅答案",
+}
+
+
+def render_exam_markdown(
+    cursor, exam_id: int, with_answers: bool = False, mode: str | None = None,
+) -> tuple[str, str] | None:
     """渲染试卷为 Markdown。返回 (文件名, 内容)；试卷不存在返回 None。
 
-    with_answers=False：仅题目卷。
-    with_answers=True ：题目卷 + 末尾「答案与解析」一节，便于打印后自查。
+    mode:
+    - questions      仅题目卷
+    - with_answers   题目卷 + 末尾「答案与解析」一节
+    - answers_only   只有答案与解析，不含题目（对答案、批改用）
+
+    with_answers 为兼容旧调用保留：未显式传 mode 时，True→with_answers、False→questions。
     完形题按「文章 + 逐空选项」渲染；单选题按「题干 + 选项」渲染。
     """
+    if mode is None:
+        mode = MODE_WITH_ANSWERS if with_answers else MODE_QUESTIONS
+    if mode not in VALID_MODES:
+        raise ValueError(f"未知导出模式：{mode}")
+
     data = _fetch_export_data(cursor, exam_id)
     if data is None:
         return None
@@ -249,17 +279,19 @@ def render_exam_markdown(cursor, exam_id: int, with_answers: bool = False) -> tu
     lines: list[str] = []
 
     # 抬头
-    lines.append(f"# JLPT {level} 练习试卷")
+    lines.append(f"# JLPT {level} {_MODE_TITLE[mode]}")
     lines.append("")
     lines.append(f"- 试卷编号：#{data['id']}")
     lines.append(f"- 题目数量：{data['total']} 题")
-    lines.append("- 姓名：____________　　得分：__________")
+    if mode != MODE_ANSWERS_ONLY:
+        # 仅答案的那份不是用来作答的，不需要姓名/得分栏
+        lines.append("- 姓名：____________　　得分：__________")
     lines.append("")
     lines.append("---")
     lines.append("")
 
-    # 题目卷
-    for card in data["items"]:
+    # 题目卷（仅答案模式跳过）
+    for card in data["items"] if mode != MODE_ANSWERS_ONLY else []:
         qs = card["questions"]
         if not qs:
             continue
@@ -300,11 +332,13 @@ def render_exam_markdown(cursor, exam_id: int, with_answers: bool = False) -> tu
                 lines.append("")
 
     # 答案与解析
-    if with_answers:
-        lines.append("---")
-        lines.append("")
-        lines.append("## 答案与解析")
-        lines.append("")
+    if mode in (MODE_WITH_ANSWERS, MODE_ANSWERS_ONLY):
+        if mode == MODE_WITH_ANSWERS:
+            # 跟在题目卷之后，需要分隔线与小节标题；仅答案模式抬头已是「答案与解析」
+            lines.append("---")
+            lines.append("")
+            lines.append("## 答案与解析")
+            lines.append("")
         for card in data["items"]:
             for q in card["questions"]:
                 ans = _as_text(q["answer"]).upper()
@@ -317,5 +351,6 @@ def render_exam_markdown(cursor, exam_id: int, with_answers: bool = False) -> tu
                         lines.append(f"> {ln}" if ln.strip() else ">")
                 lines.append("")
 
-    filename = f"JLPT_{level}_exam_{data['id']}.md"
+    # 文件名带模式后缀，否则同一张卷导出的两份会同名、下载时互相覆盖
+    filename = f"JLPT_{level}_exam_{data['id']}{_MODE_SUFFIX[mode]}.md"
     return filename, "\n".join(lines)

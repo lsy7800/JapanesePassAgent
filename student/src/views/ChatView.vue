@@ -13,6 +13,14 @@ const EXAMPLES = [
   '给我看1道关于条件表达的题',
 ]
 
+// 导出模式 → 按钮文案。三种模式各自产出一份独立文件，文案必须能区分，
+// 否则用户看到两个按钮无从判断哪份是哪份。
+const EXPORT_LABELS = {
+  questions: '下载试卷',
+  with_answers: '下载试卷（含答案）',
+  answers_only: '下载答案',
+}
+
 const messages = ref([])
 const input = ref('')
 const sending = ref(false)
@@ -80,7 +88,7 @@ async function onDownload(exp) {
   if (downloading.value) return
   downloading.value = true
   try {
-    await downloadExam(exp.exam_id, { withAnswers: exp.with_answers })
+    await downloadExam(exp.exam_id, { mode: exp.mode })
   } catch (e) {
     ElMessage.error('下载失败：' + (e.response?.data?.detail || e.message))
   } finally {
@@ -124,10 +132,14 @@ async function send(text) {
       messages.value[streamingIdx].stage = toolLabel(name)
       // 捕获导出工具调用 → 渲染下载按钮（exam_id 来自工具参数，可靠）
       if (name === 'export_exam' && args && args.exam_id != null) {
-        messages.value[streamingIdx].exports.push({
-          exam_id: args.exam_id,
-          with_answers: !!args.with_answers,
-        })
+        // mode 是新参数；旧调用只有 with_answers，做一次兼容映射
+        const mode = args.mode || (args.with_answers ? 'with_answers' : 'questions')
+        const list = messages.value[streamingIdx].exports
+        // 同一张卷的同一模式只保留一个按钮：模型偶尔会对同一 mode 重复调用，
+        // 不去重就会冒出两个一模一样的下载按钮
+        if (!list.some((e) => e.exam_id === args.exam_id && e.mode === mode)) {
+          list.push({ exam_id: args.exam_id, mode })
+        }
       }
     },
     onDone(sid) {
@@ -233,7 +245,7 @@ onMounted(refreshSessions)
             <div v-if="m.exports && m.exports.length" class="exports">
               <el-button
                 v-for="(exp, ei) in m.exports"
-                :key="ei"
+                :key="`${exp.exam_id}-${exp.mode}-${ei}`"
                 type="primary"
                 class="dl-btn"
                 size="small"
@@ -241,7 +253,7 @@ onMounted(refreshSessions)
                 @click="onDownload(exp)"
               >
                 <el-icon style="margin-right: 4px"><Download /></el-icon>
-                下载试卷{{ exp.with_answers ? '（含答案）' : '' }}
+                {{ EXPORT_LABELS[exp.mode] || '下载试卷' }}
               </el-button>
             </div>
           </div>

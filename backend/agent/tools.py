@@ -16,6 +16,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
 from crawler.config import DB_CONFIG, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, require
+from backend.api.exam_export import VALID_MODES as EXPORT_MODES
 from backend.services.exam_builder import build_exam
 from backend.services.exam_planner import WHOLE_EXAM_CAP
 
@@ -496,19 +497,32 @@ def recommend_questions(
 
 
 @tool
-def export_exam(exam_id: int, with_answers: bool = False) -> dict:
+def export_exam(exam_id: int, mode: str = "questions") -> dict:
     """把已生成的试卷导出为可下载的 Markdown 文件（供用户下载/打印）。
 
-    使用场景：用户组卷后说「写入 markdown / 导出 / 下载 / 打印」等。
+    使用场景：用户组卷后说「写入 markdown / 导出 / 下载 / 打印 / 给我答案」等。
     必须先有 exam_id（来自 generate_exam 的返回），本工具校验试卷存在。
 
     参数：
     - exam_id: generate_exam 返回的试卷 ID
-    - with_answers: 是否在文件末尾附「答案与解析」，默认 False（仅题目卷）
+    - mode: 导出哪一份，三选一
+      * "questions"     仅题目卷，不含答案（默认；用户要「试卷/打印做题」时用）
+      * "with_answers"  题目卷 + 答案与解析（用户要「带答案的试卷」时用）
+      * "answers_only"  只有答案与解析，不含题目（用户要「一份答案/答案单」时用）
 
-    返回 {ok, exam_id, with_answers, total, message}。
+    每种 mode 产出独立的一份文件。用户要几份就按对应 mode 分别调用，
+    例如「一份只有答案、一份试卷带答案」→ 调两次：answers_only 与 with_answers。
+    **同一个 mode 不要重复调用**——那只会产出两个一模一样的下载按钮。
+
+    返回 {ok, exam_id, mode, total, message}。
     前端会据此提供下载按钮，无需你在回复里粘贴文件内容或链接。
     """
+    if mode not in EXPORT_MODES:
+        return {
+            "ok": False,
+            "exam_id": exam_id,
+            "message": f"未知导出模式 {mode!r}，可选：{', '.join(EXPORT_MODES)}",
+        }
     conn = _connect()
     try:
         with conn.cursor() as cur:
@@ -516,12 +530,17 @@ def export_exam(exam_id: int, with_answers: bool = False) -> dict:
             exam = cur.fetchone()
             if not exam:
                 return {"ok": False, "exam_id": exam_id, "message": f"试卷 {exam_id} 不存在"}
+        label = {
+            "questions": "试卷（不含答案）",
+            "with_answers": "试卷 + 答案解析",
+            "answers_only": "仅答案与解析",
+        }[mode]
         return {
             "ok": True,
             "exam_id": exam_id,
-            "with_answers": with_answers,
+            "mode": mode,
             "total": exam["total"],
-            "message": "已准备好下载文件，请点击下方「下载试卷」按钮。",
+            "message": f"已准备好「{label}」，请点击下方下载按钮。",
         }
     finally:
         conn.close()
