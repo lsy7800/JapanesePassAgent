@@ -388,11 +388,15 @@ cd student && npm install && npm run dev
 
 ### 7. 导入题目（可选）
 
-题目已通过爬虫采集并经 LLM 校验，存于 `data/` 目录下的 JSON 文件中。批量入库：
+题目已通过爬虫采集并经 LLM 校验，存于 `data/raw/` 下的 JSON 文件中。批量入库：
 
 ```bash
 uv run python -m crawler.spiders.write_to_mysql
 ```
+
+每批数据**只保留一个权威文件**，对应的 `source` / `category` / 入库函数见
+[`docs/data-sources.md`](docs/data-sources.md)。**入库只用该清单列出的文件**——同一批曾
+存在多个字段完整度不同的版本，误用过一次导致 40 道题选项全丢。
 
 入库是**幂等**的：按 `source_ref` upsert，题组 id 保持稳定，可以放心重跑。只有源数据里
 已消失的题组才会被删除，且若它仍被试卷引用会先打印警告。
