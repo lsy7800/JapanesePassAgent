@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS questions (
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_group_id (group_id),
+    -- 支撑重新入库时按 (题组, 子题序号) upsert：避免删后重建导致题组 id 变化，
+    -- 进而触发 exam_items 的 ON DELETE CASCADE 打穿历史试卷。
+    UNIQUE KEY uk_group_seq (group_id, seq),
     FOREIGN KEY (group_id) REFERENCES question_groups(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='子题表';
 
@@ -50,6 +53,8 @@ CREATE TABLE IF NOT EXISTS options (
     label       CHAR(1) NOT NULL COMMENT '选项标签：a/b/c/d',
     content     VARCHAR(500) NOT NULL DEFAULT '' COMMENT '选项内容',
     INDEX idx_question_id (question_id),
+    -- 同理，支撑按 (子题, 选项标签) upsert
+    UNIQUE KEY uk_question_label (question_id, label),
     FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='选项表';
 

@@ -9,22 +9,52 @@ from crawler.config import DB_CONFIG
 # 三表 DDL 见 crawler/db/schema.sql，此处内联以便一键建表。
 SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "db", "schema.sql")
 
-INSERT_GROUP_SQL = """
+# ── 幂等写入策略 ──────────────────────────────────────────────────────
+# 一律按 source_ref / (group_id,seq) / (question_id,label) 做 upsert，**不删后重建**。
+#
+# 为什么不能删后重建：exam_items.group_id 的外键是 ON DELETE CASCADE，删掉题组会
+# 连带删掉历史试卷里引用它的作答记录——试卷变成空壳或缺题。改用 upsert 后题组 id
+# 保持稳定，重跑入库只更新内容，历史试卷不受影响。
+#
+# 注意 ON DUPLICATE KEY UPDATE 时 lastrowid 的坑：MySQL 在「命中重复键而走更新」
+# 时 lastrowid 为 0（或上一次的值），不能直接用来取 id，故所有 upsert 之后都用
+# SELECT 显式回查主键。
+
+UPSERT_GROUP_SQL = """
 INSERT INTO question_groups (
     type, category, article, level, exam_date, difficulty, knowledge_points, source, source_ref
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+ON DUPLICATE KEY UPDATE
+    type = VALUES(type), category = VALUES(category), article = VALUES(article),
+    level = VALUES(level), exam_date = VALUES(exam_date), difficulty = VALUES(difficulty),
+    knowledge_points = VALUES(knowledge_points), source = VALUES(source);
 """
 
-INSERT_QUESTION_SQL = """
+UPSERT_QUESTION_SQL = """
 INSERT INTO questions (group_id, seq, content, marked, answer, analysis)
-VALUES (%s, %s, %s, %s, %s, %s);
+VALUES (%s, %s, %s, %s, %s, %s)
+ON DUPLICATE KEY UPDATE
+    content = VALUES(content), marked = VALUES(marked),
+    answer = VALUES(answer), analysis = VALUES(analysis);
 """
 
-INSERT_OPTION_SQL = """
-INSERT INTO options (question_id, label, content) VALUES (%s, %s, %s);
+UPSERT_OPTION_SQL = """
+INSERT INTO options (question_id, label, content) VALUES (%s, %s, %s)
+ON DUPLICATE KEY UPDATE content = VALUES(content);
 """
 
-DELETE_SOURCE_SQL = "DELETE FROM question_groups WHERE source = %s;"
+SELECT_GROUP_ID_SQL = "SELECT id FROM question_groups WHERE source_ref = %s;"
+SELECT_SOURCE_REFS_SQL = "SELECT id, source_ref FROM question_groups WHERE source = %s;"
+COUNT_EXAM_REFS_SQL = """
+SELECT COUNT(DISTINCT exam_id) AS exams, COUNT(*) AS items
+FROM exam_items WHERE group_id IN ({});
+"""
+SELECT_QUESTION_ID_SQL = "SELECT id FROM questions WHERE group_id = %s AND seq = %s;"
+
+# 清理「本次数据里已不存在」的残留子题/选项（题型改版后子题变少的情况）
+DELETE_STALE_QUESTIONS_SQL = "DELETE FROM questions WHERE group_id = %s AND seq NOT IN ({});"
+DELETE_STALE_OPTIONS_SQL = "DELETE FROM options WHERE question_id = %s AND label NOT IN ({});"
+DELETE_ALL_OPTIONS_SQL = "DELETE FROM options WHERE question_id = %s;"
 
 OPTION_LABELS = ["a", "b", "c", "d"]
 
@@ -96,12 +126,99 @@ def init_schema(cursor):
     print("三表结构已就绪")
 
 
+def _prune_stale_groups(cursor, source, seen_refs):
+    """删掉该 source 下「本次文件里已不存在」的旧题组。
+
+    取代原先的 `DELETE FROM question_groups WHERE source=%s`（删全部再重建）：
+    那样做会让每次重跑都重建题组、id 全变，触发 exam_items 的 ON DELETE CASCADE
+    打穿历史试卷。现在只删真正消失的题组，正常重跑 seen_refs 覆盖全部 → 一个不删。
+
+    若待删题组仍被试卷引用，会打印警告说明将连带丢失多少作答记录——这是有意保留的
+    级联（题目确实没了，留着引用会渲染出缺题的试卷），但要让操作者看见。
+    """
+    cursor.execute(SELECT_SOURCE_REFS_SQL, (source,))
+    rows = cursor.fetchall()
+    existing = [
+        (r[0], r[1]) if isinstance(r, (tuple, list)) else (r["id"], r["source_ref"])
+        for r in rows
+    ]
+    stale = [gid for gid, ref in existing if ref not in seen_refs]
+    if not stale:
+        return 0
+
+    placeholders = ", ".join(["%s"] * len(stale))
+    cursor.execute(COUNT_EXAM_REFS_SQL.format(placeholders), tuple(stale))
+    row = cursor.fetchone()
+    exams, items = (row[0], row[1]) if isinstance(row, (tuple, list)) else (row["exams"], row["items"])
+    if exams:
+        print(
+            f"  ⚠ 待删的 {len(stale)} 个题组仍被 {exams} 张试卷引用，"
+            f"将连带删除 {items} 条作答记录（这些题目已不在源数据中）"
+        )
+    cursor.execute(f"DELETE FROM question_groups WHERE id IN ({placeholders});", tuple(stale))
+    print(f"  已删除 {len(stale)} 个源数据中已不存在的旧题组")
+    return len(stale)
+
+
+def _upsert_group(cursor, sql, params, source_ref):
+    """执行题组 upsert 并回查主键。
+
+    ON DUPLICATE KEY UPDATE 走更新分支时 lastrowid 不可靠，故一律 SELECT 回查。
+    """
+    cursor.execute(sql, params)
+    cursor.execute(SELECT_GROUP_ID_SQL, (source_ref,))
+    row = cursor.fetchone()
+    if not row:
+        raise RuntimeError(f"题组 upsert 后回查不到 source_ref={source_ref}")
+    return row[0] if isinstance(row, (tuple, list)) else row["id"]
+
+
+def _upsert_question(cursor, group_id, seq, content, marked, answer, analysis):
+    """执行子题 upsert 并回查主键。"""
+    cursor.execute(UPSERT_QUESTION_SQL, (group_id, seq, content, marked, answer, analysis))
+    cursor.execute(SELECT_QUESTION_ID_SQL, (group_id, seq))
+    row = cursor.fetchone()
+    if not row:
+        raise RuntimeError(f"子题 upsert 后回查不到 group_id={group_id} seq={seq}")
+    return row[0] if isinstance(row, (tuple, list)) else row["id"]
+
+
+def _prune_questions(cursor, group_id, keep_seqs):
+    """删掉该题组下本次数据未覆盖的旧子题（含其选项，靠外键级联）。
+
+    keep_seqs 为空说明这条记录一个子题都没解析出来——几乎总是「用错了入库函数」
+    （如把扁平结构的听力文件喂给了 _insert_listening_passage，它找 questions 键找不到）。
+    此时清空已有子题会静默销毁数据，故直接抛错让调用方发现。
+    """
+    if not keep_seqs:
+        raise ValueError(
+            f"题组 {group_id} 本次未解析出任何子题，拒绝清空既有子题。"
+            f"请检查是否用错入库函数（扁平结构用 write_listening_to_mysql，"
+            f"嵌套 questions 结构用 write_listening_passage_to_mysql）"
+        )
+    placeholders = ", ".join(["%s"] * len(keep_seqs))
+    cursor.execute(DELETE_STALE_QUESTIONS_SQL.format(placeholders), (group_id, *keep_seqs))
+
+
+def _prune_options(cursor, question_id, keep_labels):
+    """删掉该子题下本次数据未覆盖的旧选项（如选项数从 4 减到 3）。
+
+    keep_labels 允许为空：源数据确实存在无选项的子题（如 result_85 有 2 条），
+    这属于已知的数据缺口，不是用错函数，故不像子题那样抛错。
+    """
+    if keep_labels:
+        placeholders = ", ".join(["%s"] * len(keep_labels))
+        cursor.execute(DELETE_STALE_OPTIONS_SQL.format(placeholders), (question_id, *keep_labels))
+    else:
+        cursor.execute(DELETE_ALL_OPTIONS_SQL, (question_id,))
+
+
 def _insert_single_choice(cursor, item, source, category=None):
     """将一条校验后的单选题数据写入三表（1 题组 → 1 子题 → 4 选项）。"""
     source_ref = f"{source}#{item.get('id')}"
     knowledge_points = json.dumps(item.get("knowledge_points", []), ensure_ascii=False)
 
-    cursor.execute(INSERT_GROUP_SQL, (
+    group_id = _upsert_group(cursor, UPSERT_GROUP_SQL, (
         "single_choice",
         category,  # JLPT 题型 code（如 paraphrase/usage），见 backend/config/categories.py
         None,  # 单选题无文章
@@ -111,22 +228,22 @@ def _insert_single_choice(cursor, item, source, category=None):
         knowledge_points,
         source,
         source_ref,
-    ))
-    group_id = cursor.lastrowid
+    ), source_ref)
 
-    cursor.execute(INSERT_QUESTION_SQL, (
-        group_id,
+    question_id = _upsert_question(
+        cursor, group_id,
         1,  # 单选题子题顺序号固定为 1
         item.get("content", ""),
         item.get("marked", ""),
         item.get("answer", ""),
         item.get("analysis", ""),
-    ))
-    question_id = cursor.lastrowid
+    )
+    _prune_questions(cursor, group_id, [1])
 
     options = item.get("options", {})
     for label in OPTION_LABELS:
-        cursor.execute(INSERT_OPTION_SQL, (question_id, label, options.get(label, "")))
+        cursor.execute(UPSERT_OPTION_SQL, (question_id, label, options.get(label, "")))
+    _prune_options(cursor, question_id, OPTION_LABELS)
 
 
 def _insert_passage(cursor, passage, source, category, group_type):
@@ -150,7 +267,7 @@ def _insert_passage(cursor, passage, source, category, group_type):
                 kps.append(kp)
     knowledge_points = json.dumps(kps, ensure_ascii=False)
 
-    cursor.execute(INSERT_GROUP_SQL, (
+    group_id = _upsert_group(cursor, UPSERT_GROUP_SQL, (
         group_type,
         category,
         passage.get("article"),
@@ -160,29 +277,32 @@ def _insert_passage(cursor, passage, source, category, group_type):
         knowledge_points,
         source,
         source_ref,
-    ))
-    group_id = cursor.lastrowid
+    ), source_ref)
 
+    seqs = []
     for i, q in enumerate(questions, 1):
-        cursor.execute(INSERT_QUESTION_SQL, (
-            group_id,
-            q.get("no", i),               # 子题顺序号
-            q.get("question", ""),        # content：阅读=问句；完形无此字段 → 空
-            "",                           # marked 留空
+        seq = q.get("no", i)             # 子题顺序号
+        seqs.append(seq)
+        question_id = _upsert_question(
+            cursor, group_id, seq,
+            q.get("question", ""),       # content：阅读=问句；完形无此字段 → 空
+            "",                          # marked 留空
             q.get("answer", ""),
             q.get("analysis", ""),
-        ))
-        question_id = cursor.lastrowid
+        )
         options = q.get("options", {})
         for label in OPTION_LABELS:
-            cursor.execute(INSERT_OPTION_SQL, (question_id, label, options.get(label, "")))
+            cursor.execute(UPSERT_OPTION_SQL, (question_id, label, options.get(label, "")))
+        _prune_options(cursor, question_id, OPTION_LABELS)
+    _prune_questions(cursor, group_id, seqs)
 
 
 def write_to_mysql(json_path, source=None, category=None):
     """将校验后的 JSON 数据批量写入三表结构。
 
-    幂等策略：按 source 整批替换（先删同 source 题组，级联清理子题与选项，再重新插入），
-    重复导入不会产生脏数据。source 默认取文件名（去扩展名），如 result_67_validated。
+    幂等策略：按 source_ref upsert（题组 id 保持稳定），最后只删源数据中已消失的旧题组。
+    重复导入不会产生脏数据，也不会破坏引用这些题目的历史试卷。
+    source 默认取文件名（去扩展名），如 result_67_validated。
 
     category: JLPT 题型 code（见 backend/config/categories.py），写入 question_groups.category，
     供线上考试/智能组卷按题型选题。同一文件应对应单一题型。
@@ -200,17 +320,22 @@ def write_to_mysql(json_path, source=None, category=None):
         cursor = conn.cursor()
         init_schema(cursor)
 
-        # 幂等：清理该 source 的旧数据（外键 ON DELETE CASCADE 自动清理子题和选项）
-        cursor.execute(DELETE_SOURCE_SQL, (source,))
-        print(f"已清理来源 '{source}' 的旧数据")
-
         success = 0
+        seen_refs = set()
         for item in data:
             try:
                 _insert_single_choice(cursor, item, source, category)
+                seen_refs.add(f"{source}#{item.get('id')}")
                 success += 1
             except Exception as e:
                 print(f"写入失败 ID: {item.get('id')}, 错误: {e}")
+
+        # 只在整批都成功时清理残留：有写入失败时 seen_refs 不完整，
+        # 贸然清理会把「其实还在源数据里、只是这次写失败」的题组删掉。
+        if success == len(data):
+            _prune_stale_groups(cursor, source, seen_refs)
+        elif success:
+            print(f"  ⚠ 有 {len(data) - success} 条写入失败，跳过旧题组清理以免误删")
 
         conn.commit()
         print(f"写入完成: 成功 {success}/{len(data)}（source={source}, category={category}）")
@@ -219,7 +344,7 @@ def write_to_mysql(json_path, source=None, category=None):
 
 
 def _write_passages(json_path, source, category, group_type, normalize=None):
-    """通用「一篇 N 问」批量入库（cloze / reading 共用），按 source 幂等替换。
+    """通用「一篇 N 问」批量入库（cloze / reading 共用），按 source_ref 幂等 upsert。
 
     normalize: 可选，把一条原始记录转成 {article, questions:[...]} 结构（短篇阅读用，
     因其校验产物是扁平一问）；None 表示记录本身已是嵌套结构（完形）。
@@ -236,19 +361,24 @@ def _write_passages(json_path, source, category, group_type, normalize=None):
         cursor = conn.cursor()
         init_schema(cursor)
 
-        cursor.execute(DELETE_SOURCE_SQL, (source,))
-        print(f"已清理来源 '{source}' 的旧数据")
-
         groups = 0
         subs = 0
+        seen_refs = set()
         for rec in data:
             passage = normalize(rec) if normalize else rec
             try:
                 _insert_passage(cursor, passage, source, category, group_type)
+                seen_refs.add(f"{source}#{passage.get('id')}")
                 groups += 1
                 subs += len(passage.get("questions", []))
             except Exception as e:
                 print(f"写入失败 篇 ID: {passage.get('id')}, 错误: {e}")
+
+        # 只在整批都成功时清理残留，避免把「写失败但仍在源数据里」的题组误删
+        if groups == len(data):
+            _prune_stale_groups(cursor, source, seen_refs)
+        elif groups:
+            print(f"  ⚠ 有 {len(data) - groups} 篇写入失败，跳过旧题组清理以免误删")
 
         conn.commit()
         print(f"写入完成: {groups}/{len(data)} 篇，共 {subs} 小题（source={source}, category={category}, type={group_type}）")
@@ -303,10 +433,15 @@ def write_reading_to_mysql(json_path, source=None, category="reading_short"):
     _write_passages(json_path, source, category, "reading", normalize=normalize)
 
 
-INSERT_LISTENING_GROUP_SQL = """
+UPSERT_LISTENING_GROUP_SQL = """
 INSERT INTO question_groups (
     type, category, article, audio_url, level, exam_date, difficulty, knowledge_points, source, source_ref
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+ON DUPLICATE KEY UPDATE
+    type = VALUES(type), category = VALUES(category), article = VALUES(article),
+    audio_url = VALUES(audio_url), level = VALUES(level), exam_date = VALUES(exam_date),
+    difficulty = VALUES(difficulty), knowledge_points = VALUES(knowledge_points),
+    source = VALUES(source);
 """
 
 
@@ -334,7 +469,7 @@ def _insert_listening(cursor, item, source, category):
         level = m.group(0)
     knowledge_points = json.dumps(item.get("knowledge_points", []), ensure_ascii=False)
 
-    cursor.execute(INSERT_LISTENING_GROUP_SQL, (
+    group_id = _upsert_group(cursor, UPSERT_LISTENING_GROUP_SQL, (
         "listening",
         category,
         item.get("article", ""),        # 听力原文脚本
@@ -345,24 +480,26 @@ def _insert_listening(cursor, item, source, category):
         knowledge_points,
         source,
         source_ref,
-    ))
-    group_id = cursor.lastrowid
+    ), source_ref)
 
-    cursor.execute(INSERT_QUESTION_SQL, (
-        group_id,
+    question_id = _upsert_question(
+        cursor, group_id,
         1,                              # 听力一段音频一问，seq 固定 1
         item.get("question", ""),       # content：设问
         "",                             # marked 留空
         _num_to_label(item.get("answer", "")),
         item.get("analysis", ""),       # 答案说明（多数为空）
-    ))
-    question_id = cursor.lastrowid
+    )
+    _prune_questions(cursor, group_id, [1])
 
     # 按实际选项数写入（听力题多为 4 选，即时应答为 3 选）；不补空选项，
     # 避免前端渲染出多余的空 d 选项。
     choice = item.get("choice", []) or []
+    labels = []
     for i, content in enumerate(choice[:len(OPTION_LABELS)]):
-        cursor.execute(INSERT_OPTION_SQL, (question_id, OPTION_LABELS[i], content))
+        labels.append(OPTION_LABELS[i])
+        cursor.execute(UPSERT_OPTION_SQL, (question_id, OPTION_LABELS[i], content))
+    _prune_options(cursor, question_id, labels)
 
 
 def write_listening_to_mysql(json_path, source=None, category="task_listening"):
@@ -383,16 +520,21 @@ def write_listening_to_mysql(json_path, source=None, category="task_listening"):
         cursor = conn.cursor()
         init_schema(cursor)
 
-        cursor.execute(DELETE_SOURCE_SQL, (source,))
-        print(f"已清理来源 '{source}' 的旧数据")
-
         ok = 0
+        seen_refs = set()
         for item in data:
             try:
                 _insert_listening(cursor, item, source, category)
+                seen_refs.add(f"{source}#{item.get('id')}")
                 ok += 1
             except Exception as e:
                 print(f"写入失败 id: {item.get('id')}, 错误: {e}")
+
+        # 只在整批都成功时清理残留，避免把「写失败但仍在源数据里」的题组误删
+        if ok == len(data):
+            _prune_stale_groups(cursor, source, seen_refs)
+        elif ok:
+            print(f"  ⚠ 有 {len(data) - ok} 题写入失败，跳过旧题组清理以免误删")
 
         conn.commit()
         print(f"写入完成: {ok}/{len(data)} 题（source={source}, category={category}, type=listening）")
@@ -412,7 +554,7 @@ def _insert_listening_passage(cursor, item, source, category):
     if m:
         level = m.group(0)
 
-    cursor.execute(INSERT_LISTENING_GROUP_SQL, (
+    group_id = _upsert_group(cursor, UPSERT_LISTENING_GROUP_SQL, (
         "listening",
         category,
         item.get("article", ""),        # 听力脚本
@@ -423,23 +565,27 @@ def _insert_listening_passage(cursor, item, source, category):
         json.dumps([], ensure_ascii=False),
         source,
         source_ref,
-    ))
-    group_id = cursor.lastrowid
+    ), source_ref)
 
+    seqs = []
     for i, q in enumerate(item.get("questions", []), 1):
-        cursor.execute(INSERT_QUESTION_SQL, (
-            group_id,
-            q.get("no", i),
+        seq = q.get("no", i)
+        seqs.append(seq)
+        question_id = _upsert_question(
+            cursor, group_id, seq,
             q.get("question", ""),      # 题干（统合理解留空）
             "",
             _num_to_label(q.get("answer", "")),
             q.get("analysis", ""),
-        ))
-        question_id = cursor.lastrowid
+        )
         options = q.get("options", {}) or {}
+        labels = []
         for label in OPTION_LABELS:
             if label in options and options[label]:
-                cursor.execute(INSERT_OPTION_SQL, (question_id, label, options[label]))
+                labels.append(label)
+                cursor.execute(UPSERT_OPTION_SQL, (question_id, label, options[label]))
+        _prune_options(cursor, question_id, labels)
+    _prune_questions(cursor, group_id, seqs)
 
 
 def write_listening_passage_to_mysql(json_path, source=None, category="integ_listen"):
@@ -455,17 +601,23 @@ def write_listening_passage_to_mysql(json_path, source=None, category="integ_lis
     try:
         cursor = conn.cursor()
         init_schema(cursor)
-        cursor.execute(DELETE_SOURCE_SQL, (source,))
-        print(f"已清理来源 '{source}' 的旧数据")
-
         groups = subs = 0
+        seen_refs = set()
         for item in data:
             try:
                 _insert_listening_passage(cursor, item, source, category)
+                seen_refs.add(f"{source}#{item.get('id')}")
                 groups += 1
                 subs += len(item.get("questions", []))
             except Exception as e:
                 print(f"写入失败 id: {item.get('id')}, 错误: {e}")
+
+        # 只在整批都成功时清理残留，避免把「写失败但仍在源数据里」的题组误删
+        if groups == len(data):
+            _prune_stale_groups(cursor, source, seen_refs)
+        elif groups:
+            print(f"  ⚠ 有 {len(data) - groups} 组写入失败，跳过旧题组清理以免误删")
+
         conn.commit()
         print(f"写入完成: {groups}/{len(data)} 组，共 {subs} 子题（source={source}, category={category}, type=listening）")
     finally:
