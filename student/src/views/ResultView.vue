@@ -8,6 +8,7 @@ import { getResult } from '../api/exam'
 import { chatStream } from '../api/agent'
 import { audioUrl } from '../utils/audio'
 import { toolLabel } from '../utils/toolLabels'
+import { sanitizeArticle, sanitizeContent, sanitizeMd } from '../utils/sanitize'
 
 const props = defineProps({ id: { type: String, required: true } })
 const router = useRouter()
@@ -88,17 +89,19 @@ function renderContent(content, marked) {
     s = s
       .replace(/＿★＿/g, '<span class="sort-slot sort-slot--star"><i>★</i></span>')
       .replace(/＿＿/g, '<span class="sort-slot"></span>')
-    return s.replace(/\n/g, '<br/>')
+    return sanitizeContent(s.replace(/\n/g, '<br/>'))
   }
   // 划线词若只是空格括号占位符（填空题的空），不加横线，避免给括号划线
   if (marked && String(marked).replace(/[（）()[\]\s　]/g, '')) {
     const esc = String(marked).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     s = s.replace(new RegExp(esc, 'g'), (m) => `<u class="marked-word">${m}</u>`)
   }
-  return s.replace(/\n/g, '<br/>')
+  return sanitizeContent(s.replace(/\n/g, '<br/>'))
 }
 
 // 渲染文章（完形/阅读）：转义 + 高亮空号 （1）… + 下划线标记 【U】…【/U】+ 保留换行
+// 注意：上面刻意放行了 DB 里存的 <table> 原始 HTML，那部分未经过滤，
+// 所以最终结果必须过 sanitizeArticle
 function renderArticle(article) {
   if (article == null) return ''
   let s = String(article)
@@ -123,12 +126,13 @@ function renderArticle(article) {
   })
   s = s.replace(/\x00HTML(\d+)\x00/g, (_, i) => htmlBlocks[Number(i)])
 
-  return s.replace(/\n/g, '<br/>')
+  return sanitizeArticle(s.replace(/\n/g, '<br/>'))
 }
 
 
+// marked 不过滤 HTML，LLM 输出必须消毒后才能交给 v-html
 function renderMd(text) {
-  return marked.parse(text || '')
+  return sanitizeMd(marked.parse(text || ''))
 }
 
 // AI 解析结果一律以【原文翻译】/【判断】等小节开头；裁掉模型可能带出的开场白
@@ -137,7 +141,7 @@ function renderJudge(text) {
   let s = text || ''
   const first = s.indexOf('【')
   if (first > 0) s = s.slice(first)
-  return marked.parse(s)
+  return sanitizeMd(marked.parse(s))
 }
 
 async function load() {
@@ -214,7 +218,15 @@ onUnmounted(stopActive)  // 离开页面时断开未完成的流，避免连接�
       </el-card>
 
       <!-- 每张卡片：单选题 1 子题；完形题文章 + N 子题 -->
-      <el-card v-for="item in result.items" :key="item.group_id" shadow="never" class="q-card">
+      <!-- 入场延迟按下标递增，只错开前 5 张：整场卷有 40+ 张，
+           线性递增会让末尾等好几秒才出现 -->
+      <el-card
+        v-for="(item, idx) in result.items"
+        :key="item.group_id"
+        shadow="never"
+        class="q-card"
+        :style="{ animationDelay: `${Math.min(idx, 5) * 50}ms` }"
+      >
         <!-- 听力题：音频播放器 -->
         <div v-if="item.audio_url" class="q-audio">
           <audio controls preload="none" :src="audioUrl(item.audio_url)"></audio>
@@ -373,6 +385,7 @@ onUnmounted(stopActive)  // 离开页面时断开未完成的流，避免连接�
 }
 
 /* 得分卡 */
+.score-card { animation: fade-up var(--dur-slow) var(--ease-out); }
 .score-body {
   display: flex;
   align-items: center;
@@ -380,12 +393,27 @@ onUnmounted(stopActive)  // 离开页面时断开未完成的流，避免连接�
   flex-wrap: wrap;
 }
 .score-left { flex: 1; min-width: 100px; }
-.score-num { font-size: 30px; font-weight: 700; color: #f59e0b; }
+/* 分数是这一页的主角，回弹放大一次让它"落地有声" */
+.score-num {
+  font-size: 30px;
+  font-weight: 700;
+  color: #f59e0b;
+  animation: score-pop var(--dur-slow) var(--ease-spring) 80ms backwards;
+}
+@keyframes score-pop {
+  from { opacity: 0; transform: scale(0.7); }
+  to   { opacity: 1; transform: scale(1); }
+}
 .score-label { color: #999; margin-top: 4px; font-size: 13px; }
 .score-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
-/* 题目卡 */
-.q-card { margin-top: 14px; }
+/* 题目卡：前几张错开落位。
+   延迟由模板按 v-for 下标内联绑定，不用 nth-of-type —— 同级的 score-card /
+   weak-card 渲染出来也是 div，选择器序号会随卡片增减而错位。 */
+.q-card {
+  margin-top: 14px;
+  animation: fade-up var(--dur-slow) var(--ease-out) backwards;
+}
 .q-title {
   display: flex;
   align-items: center;
@@ -505,7 +533,13 @@ onUnmounted(stopActive)  // 离开页面时断开未完成的流，避免连接�
 }
 .opt-row.correct { background: #f0f9eb; color: #67c23a; }
 .opt-row.wrong   { background: #fef0f0; color: #f56c6c; }
-.opt-row .mark   { margin-left: 8px; font-size: 12px; font-weight: 600; }
+/* ✓/✗ 标记比选项本身晚一点浮现，视线先看选项再看判定 */
+.opt-row .mark {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  animation: fade-in var(--dur-slow) var(--ease-out) 120ms backwards;
+}
 .unanswered { color: #e6a23c; margin-top: 8px; font-size: 13px; }
 .analysis {
   margin-top: 12px;
@@ -518,12 +552,14 @@ onUnmounted(stopActive)  // 离开页面时断开未完成的流，避免连接�
   font-size: 13px;
 }
 
+/* AI 解析面板：点「AI 解析」后出现，滑入而非突然占位 */
 .ai-analysis {
   margin-top: 12px;
   padding: 12px 14px;
   background: #fbf9f4;
   border-left: 3px solid #f59e0b;
   border-radius: 0 6px 6px 0;
+  animation: fade-up var(--dur-base) var(--ease-out);
 }
 .ai-label { font-size: 12px; color: #f59e0b; font-weight: 600; margin-bottom: 6px; }
 
@@ -536,11 +572,19 @@ onUnmounted(stopActive)  // 离开页面时断开未完成的流，避免连接�
   color: #b45309;
   font-weight: 600;
 }
+/* 阶段文字呼吸，表明还在跑（骨架屏自带动画，这里只补文字） */
+.ai-stage-line span { animation: breathe 1.6s var(--ease-in-out) infinite; }
+@keyframes breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
 .ai-slow-hint {
   font-size: 12px;
   color: #909399;
   line-height: 1.6;
   margin-top: 4px;
+  /* 慢速提示是 8 秒后才出现的安抚文案，淡入进来不打断阅读 */
+  animation: fade-in var(--dur-slow) var(--ease-out);
 }
 .ai-skeleton { margin-top: 10px; }
 
@@ -553,13 +597,21 @@ onUnmounted(stopActive)  // 离开页面时断开未完成的流，避免连接�
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px dashed #e4d9c3;
+  animation: fade-up var(--dur-base) var(--ease-out);
 }
 .ai-error-msg { font-size: 13px; color: #f56c6c; flex: 1; min-width: 180px; }
 
 .weak-card { margin-top: 20px; }
 .weak-head { display: flex; align-items: center; justify-content: space-between; }
 .weak-empty  { color: #999; text-align: center; padding: 20px 0; }
-.weak-perfect { color: #67c23a; text-align: center; padding: 20px 0; font-weight: 600; }
+/* 全对是值得庆祝的结果，给一次回弹入场 */
+.weak-perfect {
+  color: #67c23a;
+  text-align: center;
+  padding: 20px 0;
+  font-weight: 600;
+  animation: score-pop var(--dur-slow) var(--ease-spring);
+}
 
 /* 流式光标 */
 .cursor {

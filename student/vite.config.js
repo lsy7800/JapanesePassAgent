@@ -3,6 +3,11 @@ import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
   plugins: [vue()],
+  // DOMPurify 需要 DOM，故测试跑在 jsdom 环境（npm test）
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.test.js'],
+  },
   server: {
     port: 5174,
     proxy: {

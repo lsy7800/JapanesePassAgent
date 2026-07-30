@@ -1,6 +1,7 @@
 <script setup>
 import { ref, nextTick, onMounted } from 'vue'
 import { marked } from 'marked'
+import { sanitizeMd } from '../utils/sanitize'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, Plus, Delete, ChatLineRound, Loading } from '@element-plus/icons-vue'
 import {
@@ -40,8 +41,10 @@ const clearingAll = ref(false)
 let streamingIdx = -1
 let closeStream = null
 
+// marked 默认不过滤 HTML，AI 回复里的 <script>/<img onerror> 会原样进 DOM，
+// 必须消毒后才能交给 v-html（token 存 localStorage，XSS 等于拿到 7 天凭证）
 function renderMd(text) {
-  return marked.parse(text || '')
+  return sanitizeMd(marked.parse(text || ''))
 }
 
 async function refreshSessions() {
@@ -243,17 +246,20 @@ onMounted(refreshSessions)
         <el-icon style="margin-right: 4px"><Plus /></el-icon>新会话
       </el-button>
       <div class="session-list">
-        <div
-          v-for="s in sessions"
-          :key="s.id"
-          class="session-item"
-          :class="{ active: s.id === sessionId }"
-          @click="openSession(s.id)"
-        >
-          <el-icon class="s-icon"><ChatLineRound /></el-icon>
-          <span class="s-title">{{ s.title }}</span>
-          <el-icon class="s-del" @click.stop="onDeleteSession(s.id)"><Delete /></el-icon>
-        </div>
+        <!-- transition-group：删除会话时其余项平滑上移，而非瞬间跳位 -->
+        <transition-group name="sess">
+          <div
+            v-for="s in sessions"
+            :key="s.id"
+            class="session-item"
+            :class="{ active: s.id === sessionId }"
+            @click="openSession(s.id)"
+          >
+            <el-icon class="s-icon"><ChatLineRound /></el-icon>
+            <span class="s-title">{{ s.title }}</span>
+            <el-icon class="s-del" @click.stop="onDeleteSession(s.id)"><Delete /></el-icon>
+          </div>
+        </transition-group>
         <div v-if="sessions.length === 0" class="session-empty">暂无历史会话</div>
       </div>
       <!-- 清空按钮放列表底部：与「新会话」拉开距离，降低误点概率 -->
@@ -324,8 +330,11 @@ onMounted(refreshSessions)
           :disabled="sending"
           @keydown="onKeydown"
         />
-        <el-button v-if="sending" class="send-btn" @click="stopStream">停止</el-button>
-        <el-button v-else type="primary" class="send-btn" @click="send()">发送</el-button>
+        <!-- 发送 ↔ 停止 交叉淡入。mode=out-in 避免两个按钮同时占位把输入框挤窄 -->
+        <transition name="btn-swap" mode="out-in">
+          <el-button v-if="sending" key="stop" class="send-btn" @click="stopStream">停止</el-button>
+          <el-button v-else key="send" type="primary" class="send-btn" @click="send()">发送</el-button>
+        </transition>
       </div>
     </div>
   </div>
@@ -353,6 +362,9 @@ onMounted(refreshSessions)
   overflow: hidden;
 }
 .new-btn { width: 100%; margin-bottom: 12px; flex-shrink: 0; }
+/* + 图标 hover 旋转，呼应"新建" */
+.new-btn :deep(.el-icon) { transition: transform var(--dur-slow) var(--ease-spring); }
+.new-btn:hover :deep(.el-icon) { transform: rotate(90deg); }
 /* 金色实心按钮配深色文字，对比度更高、清晰可读（避免金底白字发虚） */
 .new-btn,
 .dl-btn {
@@ -366,6 +378,8 @@ onMounted(refreshSessions)
   overscroll-behavior: contain;
   margin: 0 -6px;
   padding: 0 6px;
+  /* 离场项用 position:absolute 脱离流，需要这里做定位参照 */
+  position: relative;
 }
 /* 清空按钮固定在侧栏底部，与列表用分隔线隔开 */
 .clear-btn {
@@ -384,10 +398,31 @@ onMounted(refreshSessions)
   cursor: pointer;
   color: #606266;
   font-size: 13px;
-  transition: background 0.15s;
+  position: relative;
+  transition: background-color var(--dur-base) var(--ease-out),
+              color var(--dur-base) var(--ease-out),
+              transform var(--dur-base) var(--ease-out);
 }
 .session-item:hover { background: #f5f7fa; }
+.session-item:active { transform: scale(0.98); transition-duration: var(--dur-fast); }
 .session-item.active { background: #fef3e2; color: #b45309; font-weight: 500; }
+/* 选中项左侧金色竖条从中间展开，标出"当前在这个会话" */
+.session-item.active::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  width: 3px;
+  height: 60%;
+  border-radius: 2px;
+  background: #f59e0b;
+  transform: translateY(-50%);
+  animation: bar-expand var(--dur-base) var(--ease-out);
+}
+@keyframes bar-expand {
+  from { height: 0; }
+  to   { height: 60%; }
+}
 .session-item .s-icon { flex-shrink: 0; font-size: 14px; }
 .session-item .s-title {
   flex: 1;
@@ -400,11 +435,28 @@ onMounted(refreshSessions)
   flex-shrink: 0;
   opacity: 0;
   color: #c0c4cc;
-  transition: opacity 0.15s, color 0.15s;
+  transition: opacity var(--dur-base) var(--ease-out),
+              color var(--dur-base) var(--ease-out),
+              transform var(--dur-base) var(--ease-spring);
 }
 .session-item:hover .s-del { opacity: 1; }
-.session-item .s-del:hover { color: #f56c6c; }
-.session-empty { color: #c0c4cc; font-size: 13px; text-align: center; margin-top: 20px; }
+.session-item .s-del:hover { color: #f56c6c; transform: scale(1.2); }
+.session-item .s-del:active { transform: scale(0.9); transition-duration: var(--dur-fast); }
+.session-empty {
+  color: #c0c4cc;
+  font-size: 13px;
+  text-align: center;
+  margin-top: 20px;
+  animation: fade-in var(--dur-slow) var(--ease-out);
+}
+
+/* 会话列表增删：离场项脱离文档流（position:absolute），
+   剩下的项才能用 .sess-move 平滑补位而不是瞬间跳上来 */
+.sess-enter-active { transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out); }
+.sess-leave-active { transition: opacity var(--dur-fast) var(--ease-in-out), transform var(--dur-fast) var(--ease-in-out); position: absolute; width: calc(100% - 12px); }
+.sess-enter-from { opacity: 0; transform: translateX(-10px); }
+.sess-leave-to { opacity: 0; transform: translateX(-10px); }
+.sess-move { transition: transform var(--dur-base) var(--ease-out); }
 
 .chat-wrap {
   flex: 1;
@@ -439,6 +491,7 @@ onMounted(refreshSessions)
   text-align: center;
   margin-top: 40px;
   padding: 0 8px;
+  animation: fade-up var(--dur-slow) var(--ease-out);
 }
 .examples {
   display: flex;
@@ -447,10 +500,29 @@ onMounted(refreshSessions)
   justify-content: center;
   margin-top: 12px;
 }
+/* 示例问句依次浮现，引导视线落到"可以点这个" */
+.examples :deep(.el-button) {
+  animation: fade-up var(--dur-slow) var(--ease-out) backwards;
+}
+.examples :deep(.el-button:nth-child(2)) { animation-delay: 70ms; }
+.examples :deep(.el-button:nth-child(3)) { animation-delay: 140ms; }
 
 .msg-row { display: flex; margin-bottom: 12px; }
+/* 气泡从各自那一侧滑入，方向暗示"谁在说话"。
+   动画挂在 .bubble 上而非 .msg-row：行是 flex 容器，
+   给它加 transform 会让子元素的对齐在动画期间抖动。 */
 .msg-row.user { justify-content: flex-end; }
 .msg-row.assistant { justify-content: flex-start; }
+.msg-row.user .bubble { animation: bubble-in-right var(--dur-base) var(--ease-out); }
+.msg-row.assistant .bubble { animation: bubble-in-left var(--dur-base) var(--ease-out); }
+@keyframes bubble-in-right {
+  from { opacity: 0; transform: translate(8px, 6px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes bubble-in-left {
+  from { opacity: 0; transform: translate(-8px, 6px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
 
 .bubble {
   max-width: 82%;
@@ -483,19 +555,32 @@ onMounted(refreshSessions)
   50%       { opacity: 0; }
 }
 
-/* 首 token 前的等待提示 */
+/* 首 token 前的等待提示。文字随阶段变化，做一次呼吸让它显得"在动" */
 .waiting {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 13px;
   color: #b45309;
+  animation: fade-in var(--dur-base) var(--ease-out);
 }
+.waiting span { animation: breathe 1.6s var(--ease-in-out) infinite; }
+@keyframes breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+
 .exports {
   margin-top: 10px;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+/* 下载按钮在工具调用后才出现，给一次回弹入场提示"可以下载了" */
+.dl-btn { animation: pop-in var(--dur-slow) var(--ease-spring); }
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.85); }
+  to   { opacity: 1; transform: scale(1); }
 }
 
 .chat-input {
@@ -507,6 +592,13 @@ onMounted(refreshSessions)
 }
 .chat-input :deep(.el-textarea) { flex: 1; min-width: 0; }
 .send-btn { flex-shrink: 0; height: 60px; }
+/* 发送 ↔ 停止 交叉淡入。时长取 fast：这里是高频操作，动画长了会挡手 */
+.btn-swap-enter-active,
+.btn-swap-leave-active {
+  transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+.btn-swap-enter-from,
+.btn-swap-leave-to { opacity: 0; transform: scale(0.94); }
 
 /* markdown 内容 */
 .md :deep(p)  { margin: 6px 0; }
