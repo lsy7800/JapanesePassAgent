@@ -3,12 +3,17 @@
 对应 README「API 设计 - 题库管理」：
 - GET /api/v1/questions           题目列表（分页 + 筛选）
 - GET /api/v1/questions/{group_id} 获取完整题组（含所有子题和选项）
+
+鉴权分级：题组详情含 answer/analysis，学生端拿到就等于拿到答案，故与列表、
+批次统计一并限定 admin（这三个只有后台校对界面在用）。学生端只通过
+/exams 路由做题，那边的 ExamItemOut 刻意不含答案字段。
+/categories 是级别→题型联动的元数据，两端都要用，只要求登录。
 """
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from backend.api.deps import get_db, require_admin
+from backend.api.deps import get_current_user, get_db, require_admin
 from backend.config.categories import (
     SECTION_LABELS,
     category_name,
@@ -31,6 +36,7 @@ router = APIRouter(prefix="/api/v1", tags=["questions"])
 def list_categories(
     level: str | None = Query(default=None, description="按级别过滤，如 N2"),
     examable_only: bool = Query(default=False, description="仅返回支持出题的题型"),
+    _=Depends(get_current_user),
 ):
     """返回 JLPT 题型列表（供前端级别→题型联动）。含板块标签。"""
     cats = get_categories(level=level, examable_only=examable_only)
@@ -63,7 +69,7 @@ def _parse_knowledge_points(raw) -> list:
 
 
 @router.get("/sources", response_model=list[SourceStat])
-def list_sources(conn=Depends(get_db)):
+def list_sources(conn=Depends(get_db), _=Depends(require_admin)):
     """列出各题库批次及其题组数，供前端批次筛选下拉使用。source 为 NULL 的（API 手动创建）归并为 'manual'。"""
     with conn.cursor() as cursor:
         cursor.execute(
@@ -91,6 +97,7 @@ def list_questions(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     conn=Depends(get_db),
+    _=Depends(require_admin),
 ):
     where = []
     params = []
@@ -245,7 +252,7 @@ def _insert_group_rows(cursor, payload: QuestionGroupCreate) -> int:
 
 
 @router.get("/questions/{group_id}", response_model=QuestionGroupOut)
-def get_question_group(group_id: int, conn=Depends(get_db)):
+def get_question_group(group_id: int, conn=Depends(get_db), _=Depends(require_admin)):
     with conn.cursor() as cursor:
         group = _fetch_group(cursor, group_id)
     if group is None:
