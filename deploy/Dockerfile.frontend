@@ -1,0 +1,45 @@
+# 前端镜像：构建两个 SPA，用一个 nginx 同时伺服学生端和后台。
+#
+# 两个 app 的依赖清单完全一致，但仍分别 npm ci —— 各自的 package-lock.json 是
+# 可复现构建的依据。
+#
+# VITE_AUDIO_BASE_URL 必须在构建期传入：Vite 把 import.meta.env 静态内联进产物，
+# 运行时改环境变量没有任何效果。要换音频地址必须重新 build。
+FROM node:24-bookworm-slim AS build
+
+WORKDIR /src
+
+# 学生端
+COPY student/package.json student/package-lock.json ./student/
+RUN cd student && npm ci
+COPY student/ ./student/
+
+# 听力音频基址。默认留空 → audio.js 回落到根相对路径，由 nginx 的 /mp3/ 代理兜住。
+# 迁到对象存储后在这里传 https 地址（当前那个 HTTP 源站没有有效证书，
+# 站点上 HTTPS 后会被浏览器 mixed-content 拦掉）。
+ARG VITE_AUDIO_BASE_URL=""
+ENV VITE_AUDIO_BASE_URL=$VITE_AUDIO_BASE_URL
+RUN cd student && npm run build
+
+# 后台管理
+COPY frontend/package.json frontend/package-lock.json ./frontend/
+RUN cd frontend && npm ci
+COPY frontend/ ./frontend/
+RUN cd frontend && npm run build
+
+
+FROM nginx:1.29-alpine AS runtime
+
+# www.<域名> → 学生端，admin.<域名> → 后台
+COPY --from=build /src/student/dist  /usr/share/nginx/html/student
+COPY --from=build /src/frontend/dist /usr/share/nginx/html/admin
+
+COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+# 放在 conf.d 之外：主配置有 include /etc/nginx/conf.d/*.conf，
+# 若放进去会被当成 http 层配置额外加载一次（虽能启动，但全局生效且易误解）。
+COPY deploy/proxy-common.conf /etc/nginx/proxy-common.conf
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -qO- http://127.0.0.1/nginx-health || exit 1

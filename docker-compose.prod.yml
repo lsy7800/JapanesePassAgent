@@ -1,0 +1,99 @@
+# 生产编排：MySQL + 后端 + nginx（含两个前端产物）。
+#
+# 与 docker-compose.yml 的区别：那个只起本地开发用的 MySQL，这个是整套。
+# 两者的 db 服务用了不同的 volume 名，不会互相污染数据。
+#
+# 用法：
+#   cp .env.example .env        # 填 DB_PASSWORD / DEEPSEEK_API_KEY / JWT_SECRET / ALLOWED_ORIGINS
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml logs -f backend
+#
+# 首次部署还要建表和建管理员，见 deploy/README.md。
+services:
+  db:
+    image: mysql:8.0
+    container_name: jlpt-mysql-prod
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD 必须在 .env 中设置}
+      MYSQL_DATABASE: ${DB_NAME:-jlpt}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_prod_data:/var/lib/mysql
+    # 不发布端口：只有同网络的 backend 需要访问，不暴露到宿主机/公网。
+    # 要用客户端连上去排查时临时加 -p，或走 docker compose exec db mysql。
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${DB_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [internal]
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: jlpt-backend:latest
+    container_name: jlpt-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ENV: production
+      # 容器内连同网络的 db 服务，固定 3306；宿主机那套 3307 只是为了避开本地占用
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: ${DB_USER:-root}
+      DB_PASSWORD: ${DB_PASSWORD:?}
+      DB_NAME: ${DB_NAME:-jlpt}
+      # 生产必须显式配置为真实域名，且与 deploy/nginx.conf 的 server_name 一致。
+      # 留空则不挂 CORS 中间件（同域部署适用），绝不会回落成 "*"。
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 必须设置，用 openssl rand -hex 32 生成}
+      # 日志：生产输出单行 JSON 到 stdout，用 docker compose logs 看
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # 限流配额（进程内计数，故下面只起单 worker）
+      RATELIMIT_LOGIN_PER_MIN: ${RATELIMIT_LOGIN_PER_MIN:-10}
+      RATELIMIT_REGISTER_PER_HOUR: ${RATELIMIT_REGISTER_PER_HOUR:-20}
+      RATELIMIT_LLM_PER_MIN: ${RATELIMIT_LLM_PER_MIN:-10}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?}
+      DEEPSEEK_API_URL: ${DEEPSEEK_API_URL:-https://api.deepseek.com/v1/chat/completions}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+    # 同样不发布端口：只由 nginx 反代访问
+    networks: [internal]
+
+  nginx:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.frontend
+      args:
+        # 构建期注入：Vite 把 import.meta.env 静态内联进产物，运行时改无效。
+        # 留空则前端用根相对路径，由 nginx 的 /mp3/ 兜住。
+        VITE_AUDIO_BASE_URL: ${VITE_AUDIO_BASE_URL:-}
+    image: jlpt-frontend:latest
+    container_name: jlpt-nginx
+    restart: unless-stopped
+    depends_on: [backend]
+    ports:
+      - "80:80"
+      # HTTPS 建议在这台机器前面再放一层（云负载均衡 / Caddy / certbot+nginx），
+      # 由那层终止 TLS 再转到 80。若要在本容器内直接终止 TLS，
+      # 放开下面这行并把证书挂进去，同时在 nginx.conf 里加 listen 443 ssl。
+      # - "443:443"
+    volumes:
+      # 听力音频临时方案：宿主机目录直挂。迁对象存储后删掉这行，
+      # 改为构建时传 VITE_AUDIO_BASE_URL 指向存储桶。
+      - ${AUDIO_DIR:-./audio}:/srv/audio:ro
+      # - ./deploy/certs:/etc/nginx/certs:ro
+    networks: [internal]
+
+volumes:
+  # 与开发用 docker-compose.yml 的 mysql_data 分开，避免误连/误清
+  mysql_prod_data:
+
+networks:
+  internal:
+    driver: bridge
