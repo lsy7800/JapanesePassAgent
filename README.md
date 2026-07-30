@@ -225,6 +225,7 @@ GET `/questions` 支持参数：`type` / `level` / `difficulty_min` / `difficult
 | 方法 | 路径 | 说明 | 权限 |
 |------|------|------|------|
 | GET | `/exams` | 当前用户考试历史（已提交，分页） | 登录 |
+| DELETE | `/exams` | 清空自己的考试数据（`scope=drafts`/`all`） | 登录 |
 | POST | `/exams/generate` | 手动组卷（按题型/难度筛选） | 登录 |
 | POST | `/exams/smart-generate` | AI 智能组卷（一次性返回） | 登录 |
 | GET | `/exams/smart-generate/stream` | AI 智能组卷（SSE，逐阶段推进度） | 登录 |
@@ -234,6 +235,14 @@ GET `/questions` 支持参数：`type` / `level` / `difficulty_min` / `difficult
 | GET | `/exams/{id}/export` | 导出 Markdown 试卷 | 归属用户 |
 
 POST `/exams/generate` 参数：`level` / `types` / `total_questions` / `difficulty_range` / `time_limit_minutes`
+
+GET `/exams/{id}/export` 的 `mode` 决定导出哪一份：`questions` 仅题目 /
+`with_answers` 题目+答案 / `answers_only` 只有答案与解析。三份文件名带不同后缀，
+可同时下载而不互相覆盖。（旧参数 `with_answers` 仍兼容。）
+
+DELETE `/exams` 的 `scope`：`drafts`（默认）只清「组好但一道题都没做」的试卷；
+`all` 清全部，含已提交成绩。`user_id` 取自 JWT、不接受调用方指定，避免越权清空他人数据。
+注意 `all` 会让薄弱点与学习统计一并归零——两者都是从 `exam_items` 实时聚合的，无独立统计表。
 
 #### AI 智能组卷的两个端点
 

@@ -1,8 +1,8 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { listExams } from '../api/exam'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { listExams, clearExams } from '../api/exam'
 
 const router = useRouter()
 const loading = ref(false)
@@ -10,6 +10,7 @@ const items = ref([])
 const total = ref(0)
 const page = ref(1)
 const PAGE_SIZE = 20
+const clearing = ref(false)
 
 function accuracy(item) {
   if (!item.total) return '—'
@@ -40,6 +41,48 @@ function viewResult(id) {
   router.push(`/result/${id}`)
 }
 
+/**
+ * 清空考试数据。
+ * scope='drafts' 只清「组了没做」的草稿，无损失，不必吓用户；
+ * scope='all'    连已提交的历史分数一起删，且薄弱点/统计会归零 —— 必须讲清代价。
+ */
+async function onClear(scope) {
+  const isAll = scope === 'all'
+  try {
+    await ElMessageBox.confirm(
+      isAll
+        ? '将删除你的全部考试记录，包括已提交的成绩。薄弱点分析与学习统计会一并归零，' +
+          'AI 智能组卷将失去个性化依据。此操作不可恢复。'
+        : '将删除「组好但一道题都没做」的试卷。已提交的成绩与做过的记录不受影响。',
+      isAll ? '清空全部考试数据' : '清理未作答的试卷',
+      {
+        type: isAll ? 'error' : 'warning',
+        confirmButtonText: isAll ? '我确定，全部删除' : '确定清理',
+        cancelButtonText: '取消',
+        confirmButtonClass: isAll ? 'el-button--danger' : '',
+      },
+    )
+  } catch {
+    return // 用户取消
+  }
+
+  clearing.value = true
+  try {
+    const r = await clearExams(scope)
+    if (r.deleted_exams === 0) {
+      ElMessage.info(isAll ? '没有考试数据可清空' : '没有未作答的试卷')
+    } else {
+      ElMessage.success(`已清空 ${r.deleted_exams} 张试卷、${r.deleted_items} 条作答记录`)
+    }
+    page.value = 1
+    await load()
+  } catch (e) {
+    ElMessage.error('清空失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    clearing.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -47,6 +90,14 @@ onMounted(load)
   <div class="history-wrap">
     <div class="history-head">
       <span class="sub">共 {{ total }} 次已提交</span>
+      <div class="head-actions">
+        <el-button size="small" :loading="clearing" @click="onClear('drafts')">
+          清理未作答试卷
+        </el-button>
+        <el-button size="small" type="danger" plain :loading="clearing" @click="onClear('all')">
+          清空全部数据
+        </el-button>
+      </div>
     </div>
 
     <el-empty v-if="!loading && items.length === 0" description="还没有考试记录，去考一套吧">
@@ -124,9 +175,16 @@ onMounted(load)
 }
 .history-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
   margin-bottom: 16px;
+}
+/* 清空按钮靠右，与统计文字分开，避免误点 */
+.head-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
 }
 .sub { font-size: 13px; color: #909399; }
 .pagination { margin-top: 16px; display: flex; justify-content: center; }

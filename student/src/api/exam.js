@@ -13,6 +13,16 @@ export function generateExam(payload) {
   return http.post('/exams/generate', payload).then((r) => r.data)
 }
 
+/**
+ * 清空当前用户的考试数据。
+ * @param {'drafts'|'all'} scope
+ *   drafts 只清「组了没做」的草稿；all 清全部（含已提交的历史分数）
+ * @returns {Promise<{deleted_exams:number, deleted_items:number}>}
+ */
+export function clearExams(scope = 'drafts') {
+  return http.delete('/exams', { params: { scope } }).then((r) => r.data)
+}
+
 // AI 智能组卷：按自然语言需求 + 用户薄弱点，由后端 LLM 规划并落库
 export function smartGenerateExam(payload) {
   return http.post('/exams/smart-generate', payload).then((r) => r.data)

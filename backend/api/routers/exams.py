@@ -106,6 +106,59 @@ def list_exams(
     return ExamHistoryResponse(items=items, total=total)
 
 
+@router.delete("")
+def clear_exams(
+    scope: str = "drafts",
+    conn=Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """清空当前用户的考试数据。
+
+    scope：
+    - drafts（默认）只删未提交且零作答的草稿——「组了没做」的卷，删了不损失任何记录
+    - all              删全部考试数据，含已提交的历史分数
+
+    **只删自己的**：user_id 取自 JWT，不接受调用方指定，避免越权清空他人数据。
+    exam_items 由外键 ON DELETE CASCADE 一并清理。
+
+    注意 scope=all 的连带影响：薄弱点与学习统计都是从 exam_items 实时聚合的
+    （无独立统计表），清空后会一并归零，AI 智能组卷将退回「按级别均衡出题」。
+    """
+    if scope not in ("drafts", "all"):
+        raise HTTPException(
+            status_code=400, detail=f"未知清空范围：{scope}（可选 drafts/all）"
+        )
+    uid = current_user["id"]
+
+    with conn.cursor() as cur:
+        if scope == "all":
+            where, params = "user_id = %s", (uid,)
+        else:
+            # 草稿定义：未提交，且没有任何一条作答记录——只要动过就不算草稿，
+            # 避免把「做了一半还想接着做」的卷当成垃圾清掉
+            where = """user_id = %s AND status = 'created'
+                       AND id NOT IN (
+                           SELECT DISTINCT exam_id FROM exam_items
+                           WHERE user_answer IS NOT NULL AND user_answer <> ''
+                       )"""
+            params = (uid,)
+
+        # 先统计再删，好让前端能明确告知「清掉了多少」
+        cur.execute(f"SELECT COUNT(*) AS n FROM exams WHERE {where}", params)
+        exams_n = cur.fetchone()["n"]
+        cur.execute(
+            f"""SELECT COUNT(*) AS n FROM exam_items
+                WHERE exam_id IN (SELECT id FROM exams WHERE {where})""",
+            params,
+        )
+        items_n = cur.fetchone()["n"]
+
+        cur.execute(f"DELETE FROM exams WHERE {where}", params)
+        conn.commit()
+
+    return {"ok": True, "scope": scope, "deleted_exams": exams_n, "deleted_items": items_n}
+
+
 @router.post("/generate", response_model=ExamOut, status_code=status.HTTP_201_CREATED)
 def generate_exam(payload: ExamGenerateRequest, conn=Depends(get_db), current_user=Depends(get_current_user)):
     # 组卷筛选：复用题库的 WHERE 拼装思路
