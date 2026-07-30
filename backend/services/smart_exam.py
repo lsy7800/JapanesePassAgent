@@ -20,6 +20,9 @@ from backend.db.chat_repo import open_conn
 from backend.services.exam_builder import build_exam
 from backend.services.exam_planner import plan_exam
 from backend.services.stats_service import compute_weak_points
+from backend.utils.logging_config import get_logger
+
+logger = get_logger("backend.smart_exam")
 
 # 规划时喂给 LLM 的薄弱点条数上限（太多会稀释提示重点）
 WEAK_LIMIT = 8
@@ -170,6 +173,15 @@ async def stream_smart_exam(
             "shortfalls": result["shortfalls"],
         }
     except NoQuestionsError as e:
+        # 题池为空是可预期的业务结果，detail 对用户有意义（说明缺哪类题），保留原文
+        logger.info("智能组卷题池为空", extra={"user_id": user_id, "level": level})
         yield {"type": "error", "code": "no_questions", "detail": str(e)}
-    except Exception as e:
-        yield {"type": "error", "code": "internal", "detail": f"组卷失败：{e}"}
+    except Exception:
+        # 内部异常：堆栈进日志，前端只给通用提示（原来的 f"组卷失败：{e}"
+        # 会把上游报错体推给浏览器）
+        logger.exception("智能组卷失败", extra={"user_id": user_id, "level": level})
+        yield {
+            "type": "error",
+            "code": "internal",
+            "detail": "组卷失败，请稍后重试或联系管理员",
+        }
