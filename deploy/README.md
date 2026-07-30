@@ -2,41 +2,55 @@
 
 整套服务由 `docker-compose.prod.yml` 编排：MySQL + 后端（uvicorn）+ nginx（含两个前端产物）。
 
-只有 nginx 发布端口（80）。后端和数据库都只在内部网络，不暴露到宿主机。
+**当前配置面向「还没有域名、直接用 IP 访问」的场景**，两个前端按端口分流：
 
 ```
-                    ┌─ www.<域名>   → student/dist ─┐
-浏览器 ── nginx:80 ─┤                                ├─ /api/v1 → backend:8000 → db:3306
-                    └─ admin.<域名> → frontend/dist ─┘
+浏览器 ─┬─ http://<IP>/      → student/dist  ─┐
+        │                                     ├─ /api/v1 → backend:8000 → db:3306
+        └─ http://<IP>:8080/ → frontend/dist ─┘
+              ↑ 默认只绑 127.0.0.1，走 SSH 隧道访问
 ```
+
+后端和数据库都只在 compose 内部网络，不暴露到宿主机。后台管理端口默认只绑本机。
+
+> 为什么用端口而不是 `/admin/` 路径前缀：两个 SPA 的 `vite base` 和 `vue-router base`
+> 都是默认 `/`，用端口零代码改动。
 
 ## 前置准备
 
-1. **改域名**。`deploy/nginx.conf` 里两处 `server_name` 的 `example.com` 换成真实域名。
-2. **配 `.env`**（在项目根目录，不是 `deploy/`）：
+**不需要改 `deploy/nginx.conf`** —— 它的 `server_name _` 是通配，IP 访问直接命中。
 
-   ```bash
-   cp .env.example .env
-   ```
+配 `.env`（在项目根目录，不是 `deploy/`）：
 
-   生产必填：
+```bash
+cp .env.example .env
+chmod 600 .env
+```
 
-   | 变量 | 说明 |
-   |------|------|
-   | `ENV` | 设为 `production`（收敛 CORS、关闭 `/docs`） |
-   | `ALLOWED_ORIGINS` | 真实域名，逗号分隔，**必须与 nginx 的 `server_name` 一致** |
-   | `JWT_SECRET` | `openssl rand -hex 32` 生成，不要沿用 `.env.example` 的占位值 |
-   | `DB_PASSWORD` | 数据库密码 |
-   | `DEEPSEEK_API_KEY` | LLM 密钥 |
+必填四项：
 
-   `DB_HOST`/`DB_PORT` 不用改 —— compose 会覆盖成容器内的 `db:3306`。
+| 变量 | 值 |
+|------|-----|
+| `ENV` | `production` |
+| `JWT_SECRET` | `openssl rand -hex 32` 生成，别沿用占位值 |
+| `DB_PASSWORD` | 自己定一个强密码 |
+| `DEEPSEEK_API_KEY` | LLM 密钥 |
 
-   ```env
-   ENV=production
-   ALLOWED_ORIGINS=https://www.example.com,https://admin.example.com
-   ```
+```env
+ENV=production
+JWT_SECRET=<openssl rand -hex 32 的输出>
+DB_PASSWORD=<强密码>
+DEEPSEEK_API_KEY=<你的密钥>
 
-   `.env` 建议收紧权限：`chmod 600 .env`。
+# 关键：用 IP 部署时留空！
+ALLOWED_ORIGINS=
+```
+
+**`ALLOWED_ORIGINS` 必须留空。** 前端和 `/api` 由同一个 nginx 从同一 origin 提供，
+浏览器根本不发跨域请求，不需要 CORS。留空时代码不挂 CORS 中间件（已验证不会
+回落成 `*`）。填成 `http://<IP>` 也不会报错，但纯属多余。
+
+`DB_HOST`/`DB_PORT` 不用改 —— compose 会覆盖成容器内的 `db:3306`。
 
 ## 首次部署
 
@@ -91,21 +105,72 @@ docker compose -f docker-compose.prod.yml exec backend \
 
 数据库只存相对路径（如 `mp3/n1/tiku79/xxx.mp3`），不存 mp3 文件本身。
 
-当前 `student/.env` 指向的源站 `http://account.for-test.cn` **没有有效 HTTPS 证书**，站点上 HTTPS 后音频会被浏览器 mixed-content 全部拦掉（778 组听力题不可用）。两个选择：
+**用 IP + HTTP 试运行时，可以先直接指向原源站**（保持 `VITE_AUDIO_BASE_URL` 为那个
+HTTP 地址即可）—— 站点本身是 HTTP，不存在 mixed-content 拦截问题。缺点是依赖对方
+可用性，它同时是爬虫目标站，随时可能断。
 
-- **临时**：把音频文件放到宿主机 `AUDIO_DIR`（默认 `./audio`），保持 `VITE_AUDIO_BASE_URL` 留空，nginx 的 `/mp3/` 会从那里伺服。目录结构要对上 `mp3/n1/...`。
-- **推荐**：传对象存储，构建时传入基址。注意 Vite 把这个值**静态内联**进产物，改完必须重新 build：
+想自己托管音频：把文件放到宿主机 `AUDIO_DIR`（默认 `./audio`），`VITE_AUDIO_BASE_URL`
+**留空**，nginx 的 `/mp3/` 会从那里伺服。目录结构要对上 `mp3/n1/tiku79/xxx.mp3`。
 
-  ```bash
-  VITE_AUDIO_BASE_URL=https://cdn.example.com \
-    docker compose -f docker-compose.prod.yml up -d --build nginx
-  ```
+```bash
+# 留空构建 → 前端走根相对路径 /mp3/...
+docker compose -f docker-compose.prod.yml up -d --build nginx
+```
+
+> ⚠️ **等你上了 HTTPS 域名，这件事就变成阻塞项**：那个源站没有有效 HTTPS 证书
+> （实测 `SSL: no alternative certificate subject name matches`），HTTPS 页面加载
+> HTTP 音频会被浏览器全部拦掉，778 组听力题不可用。届时必须迁到对象存储或自己托管。
+>
+> 注意 Vite 把 `VITE_AUDIO_BASE_URL` **静态内联**进产物，改完必须重新 build：
+>
+> ```bash
+> VITE_AUDIO_BASE_URL=https://cdn.example.com \
+>   docker compose -f docker-compose.prod.yml up -d --build nginx
+> ```
+
+## 后台管理的访问方式
+
+后台管理默认**只绑 `127.0.0.1:8080`**，公网访问不到。这是有意的：它能改用户角色、
+停用账号、增删题库。
+
+从本地机器建隧道访问：
+
+```bash
+ssh -L 8080:localhost:8080 user@<服务器IP>
+# 然后本地浏览器开 http://localhost:8080
+```
+
+确实要直接暴露到公网（不推荐），在 `.env` 里加：
+
+```env
+ADMIN_BIND=0.0.0.0
+```
+
+同时建议打开 `deploy/nginx.conf` 后台 server 块里的 `allow`/`deny` 白名单，
+只放行你的固定出口 IP。
+
+## 从 IP 切换到域名
+
+拿到域名后：
+
+1. `deploy/nginx.conf`：两个 server 块的 `listen` 都改回 `80`，`server_name` 分别填
+   `www.<域名>` 和 `admin.<域名>`，删掉 `default_server` 和 `listen 8080`。
+2. `docker-compose.prod.yml`：删掉 `"${ADMIN_BIND:-127.0.0.1}:8080:8080"` 这行。
+3. `.env`：`ALLOWED_ORIGINS` 仍可留空（同域），除非前端要跨域访问 API。
+4. 处理听力音频（见上文 ⚠️）。
+5. 重新 build：`docker compose -f docker-compose.prod.yml up -d --build`。
 
 ## HTTPS
 
-`nginx.conf` 目前只监听 80。建议在这台机器前面再放一层终止 TLS（云负载均衡、Caddy、或宿主机的 certbot+nginx），转发到 80 即可 —— 后端已经带 `--proxy-headers`，会正确识别 `X-Forwarded-Proto`。
+`nginx.conf` 目前只监听 HTTP。建议在这台机器前面再放一层终止 TLS（云负载均衡、Caddy、
+或宿主机的 certbot+nginx），转发到 80 即可 —— 后端已经带 `--proxy-headers`，会正确
+识别 `X-Forwarded-Proto`。
 
-要在容器内直接终止 TLS：放开 `docker-compose.prod.yml` 里的 443 端口和证书挂载，并在 `nginx.conf` 两个 server 块里加 `listen 443 ssl` 及证书路径。
+要在容器内直接终止 TLS：放开 `docker-compose.prod.yml` 里的 443 端口和证书挂载，
+并在 `nginx.conf` 的 server 块里加 `listen 443 ssl` 及证书路径。
+
+> HTTP 部署期间要知道的风险：登录密码和 JWT 都以明文经过网络。仅用于内部试运行
+> 尚可，**正式对学生开放前必须上 HTTPS**。
 
 ## 日常操作
 
@@ -139,18 +204,62 @@ docker compose -f docker-compose.prod.yml exec -T db \
 
 ## 上线检查
 
-- [ ] `ENV=production`，`curl https://<域名>/api/v1/../docs` 返回 404
-- [ ] `ALLOWED_ORIGINS` 与 nginx `server_name` 一致，且不含 `*`
-- [ ] `JWT_SECRET` 不是 `.env.example` 的占位值
+逐条在服务器上跑，把 `<IP>` 换成实际地址。
+
+```bash
+# 1. 三个容器都是 Up（backend/nginx 还应显示 healthy）
+docker compose -f docker-compose.prod.yml ps
+
+# 2. nginx 活着
+curl -s http://<IP>/nginx-health          # 期望 ok
+
+# 3. 后端活着（经 nginx 反代到 backend 的 /health）
+curl -s http://<IP>/api-health            # 期望 {"status":"ok"}
+
+# 4. 生产收敛生效：文档出口全关。
+#    注意不能测 http://<IP>/docs —— nginx 的 SPA fallback 会返回 index.html(200)，
+#    看起来"没关掉"其实是假象。要直接问后端容器。
+docker compose -f docker-compose.prod.yml exec backend python -c "
+import urllib.request, urllib.error
+for p in ['/docs','/redoc','/openapi.json','/health']:
+    try:
+        c = urllib.request.urlopen('http://127.0.0.1:8000'+p, timeout=5).status
+    except urllib.error.HTTPError as e:
+        c = e.code
+    print(p, '->', c)
+"
+# 期望 /docs /redoc /openapi.json 都是 404，/health 是 200
+
+# 5. 答案泄漏已堵：无 token 拿不到题组
+curl -s -o /dev/null -w "%{http_code}\n" http://<IP>/api/v1/questions/1   # 期望 401
+
+# 6. 限流生效：连打 11 次，最后应出现 429
+for i in $(seq 1 11); do
+  curl -s -o /dev/null -w "%{http_code} " -X POST http://<IP>/api/v1/auth/login \
+    -H 'Content-Type: application/json' -d '{"email":"x@y.com","password":"wrong"}'
+done; echo
+
+# 7. 日志是 JSON 且 token 已脱敏
+docker compose -f docker-compose.prod.yml logs backend | tail -5
+docker compose -f docker-compose.prod.yml logs backend | grep -c 'token=%2A' || true
+```
+
+配置与数据：
+
+- [ ] `.env` 里 `ENV=production`、`ALLOWED_ORIGINS` 留空、`JWT_SECRET` 不是占位值
 - [ ] `chmod 600 .env`
 - [ ] `chat_sessions` / `chat_messages` 两张表存在（否则 AI 对话报错）
-- [ ] 建了管理员账号，且能登录后台
-- [ ] 学生端能组卷、能听音频、AI 对话是逐字输出的（若整段才出现，说明反代还在缓冲）
+- [ ] 建了管理员账号
+- [ ] 后台管理走 SSH 隧道能打开 `http://localhost:8080`，且**公网** `http://<IP>:8080` 打不开
 - [ ] 数据库备份 cron 已配
-- [ ] `docker compose logs backend` 能看到 JSON 格式的 access 日志
-- [ ] 日志里 `token=` 显示为 `***`（不是明文 JWT）
-- [ ] 连打 11 次错密码登录，第 11 次返回 429
 - [ ] 未跑 `--workers N`（会让限流配额翻倍，见「限流」一节）
+
+浏览器端手测（这几项脚本测不了）：
+
+- [ ] 学生端能注册、登录、组卷、提交判分
+- [ ] 听力题能播放音频
+- [ ] AI 对话是**逐字**出现的 —— 若整段才出现，说明反代还在缓冲 SSE
+- [ ] 刷新 `/exam`、`/result/1` 等深链接不 404（SPA fallback 生效）
 
 ## 构建拉不到镜像时
 

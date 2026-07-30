@@ -39,7 +39,8 @@ COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 # 若放进去会被当成 http 层配置额外加载一次（虽能启动，但全局生效且易误解）。
 COPY deploy/proxy-common.conf /etc/nginx/proxy-common.conf
 
-EXPOSE 80
+# 80 学生端，8080 后台管理（按端口分流，见 nginx.conf 开头说明）
+EXPOSE 80 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -qO- http://127.0.0.1/nginx-health || exit 1

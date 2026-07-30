@@ -78,7 +78,13 @@ services:
     restart: unless-stopped
     depends_on: [backend]
     ports:
+      # 学生端
       - "80:80"
+      # 后台管理。ADMIN_BIND 默认只绑本机，公网访问不到——需要时用 SSH 隧道：
+      #   ssh -L 8080:localhost:8080 user@<服务器IP>
+      # 确实要直接暴露到公网就在 .env 里设 ADMIN_BIND=0.0.0.0
+      # （同时建议打开 nginx.conf 后台 server 块里的 allow/deny 白名单）
+      - "${ADMIN_BIND:-127.0.0.1}:8080:8080"
       # HTTPS 建议在这台机器前面再放一层（云负载均衡 / Caddy / certbot+nginx），
       # 由那层终止 TLS 再转到 80。若要在本容器内直接终止 TLS，
       # 放开下面这行并把证书挂进去，同时在 nginx.conf 里加 listen 443 ssl。
