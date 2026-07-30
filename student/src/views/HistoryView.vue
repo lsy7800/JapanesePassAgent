@@ -189,6 +189,9 @@ onMounted(load)
 .sub { font-size: 13px; color: #909399; }
 .pagination { margin-top: 16px; display: flex; justify-content: center; }
 
+/* 表格整体淡入。逐行错开在翻页时会显得拖沓（每页 20 行），整块入场更利落 */
+.desktop-table { animation: fade-up var(--dur-base) var(--ease-out); }
+
 /* 移动端卡片默认隐藏 */
 .mobile-list { display: none; }
 
@@ -199,10 +202,22 @@ onMounted(load)
   padding: 12px 14px;
   margin-bottom: 10px;
   cursor: pointer;
-  transition: box-shadow 0.2s;
-  active-transform: scale(0.99);
+  /* 原先这里写了 active-transform（不存在的属性，浏览器直接忽略），
+     改成真正的 :active + transform */
+  transition: box-shadow var(--dur-base) var(--ease-out),
+              transform var(--dur-base) var(--ease-out);
+  animation: fade-up var(--dur-base) var(--ease-out) backwards;
 }
-.history-card:active { box-shadow: 0 0 0 2px #f59e0b40; }
+.history-card:active {
+  box-shadow: 0 0 0 2px #f59e0b40;
+  transform: scale(0.985);
+  transition-duration: var(--dur-fast);
+}
+/* 列表前几条错开落位 */
+.history-card:nth-child(2) { animation-delay: 30ms; }
+.history-card:nth-child(3) { animation-delay: 60ms; }
+.history-card:nth-child(4) { animation-delay: 90ms; }
+.history-card:nth-child(5) { animation-delay: 120ms; }
 .hc-top {
   display: flex;
   align-items: center;

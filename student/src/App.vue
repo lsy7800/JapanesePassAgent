@@ -84,7 +84,8 @@ function navigate(path) {
           <el-button text class="collapse-btn" @click="toggleCollapse" :title="collapsed ? '展开侧栏' : '收起侧栏'">
             <el-icon size="18"><Fold v-if="!collapsed" /><Expand v-else /></el-icon>
           </el-button>
-          <div class="topbar-title">{{ pageTitle }}</div>
+          <!-- key 绑定标题：路由切换时元素重建，淡入动画才会重新触发 -->
+          <div :key="pageTitle" class="topbar-title">{{ pageTitle }}</div>
         </div>
         <div class="topbar-right">
           <span class="topbar-user" :title="auth.email">{{ auth.email }}</span>
@@ -106,7 +107,12 @@ function navigate(path) {
       </div>
 
       <el-main class="app-main">
-        <router-view />
+        <!-- 路由切换淡入上移：mode=out-in 避免两个页面同时占位导致跳动 -->
+        <router-view v-slot="{ Component }">
+          <transition name="page" mode="out-in">
+            <component :is="Component" :key="route.fullPath" />
+          </transition>
+        </router-view>
       </el-main>
 
       <footer v-if="route.name !== 'chat'" class="app-footer">
@@ -205,16 +211,41 @@ body { margin: 0; }
   margin: 4px 0;
   border-radius: 8px;
   padding: 0 14px !important;
+  /* 左侧竖条指示器：用 ::before 而非 border-left，避免改变盒宽导致文字位移 */
+  position: relative;
+  overflow: hidden;
+  transition: background-color var(--dur-base) var(--ease-out),
+              color var(--dur-base) var(--ease-out),
+              box-shadow var(--dur-base) var(--ease-out);
 }
+.aside-menu .el-menu-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 0;
+  border-radius: 0 2px 2px 0;
+  background: #fbbf24;
+  transform: translateY(-50%);
+  transition: height var(--dur-base) var(--ease-out);
+}
+.aside-menu .el-menu-item:hover::before { height: 18px; }
 .aside-menu .el-menu-item:hover {
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
 }
+/* 图标随 hover 轻微右移，指向内容区 */
+.aside-menu .el-menu-item .el-icon { transition: transform var(--dur-base) var(--ease-out); }
+.aside-menu .el-menu-item:hover .el-icon { transform: translateX(2px); }
 .aside-menu .el-menu-item.is-active {
   color: #fff;
   background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
   box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
 }
+/* 激活项自带金色底，竖条会看不见，隐藏掉 */
+.aside-menu .el-menu-item.is-active::before { height: 0; }
+.aside-menu .el-menu-item:active { transform: scale(0.98); }
 /* 折叠态：菜单项图标居中，去掉左内边距 */
 .app-aside.collapsed .aside-menu { padding: 10px 0; }
 .app-aside.collapsed .aside-menu .el-menu-item {
@@ -262,6 +293,7 @@ body { margin: 0; }
   background: rgba(255, 255, 255, 0.08);
   color: #fbbf24;
 }
+.contact-link:active { transform: scale(0.98); }
 .logout-btn {
   width: 100%;
   justify-content: flex-start;
@@ -291,6 +323,13 @@ body { margin: 0; }
 .topbar-left { display: flex; align-items: center; gap: 12px; }
 .collapse-btn { color: #64748b; padding: 6px; }
 .collapse-btn:hover { color: #f59e0b; }
+/* 折叠图标是 Fold/Expand 两个组件互换，直接加过渡不生效（元素被替换），
+   所以对 hover 做旋转提示，切换本身靠侧栏宽度的 width 过渡表达 */
+.collapse-btn .el-icon { transition: transform var(--dur-base) var(--ease-out); }
+.collapse-btn:hover .el-icon { transform: scale(1.12); }
+
+/* 页面标题随路由变化淡入，配合 router-view 的过渡 */
+.topbar-title { animation: fade-in var(--dur-base) var(--ease-out); }
 .topbar-right { display: flex; align-items: center; gap: 14px; }
 .topbar-user {
   font-size: 13px;
@@ -392,11 +431,23 @@ body { margin: 0; }
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
 }
+/* 移动端主要是点，:active 的反馈比 hover 重要 */
+.drawer-item:active { transform: scale(0.97); transition-duration: var(--dur-fast); }
 .drawer-item.active {
   background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
   color: #fff;
   box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
 }
+/* 抽屉打开时导航项依次滑入。
+   .drawer-brand 是第 1 个子元素，导航项从第 2 个开始，故 nth-child 从 2 起算。
+   backwards 让延迟期间保持首帧（透明），否则会先闪一下再滑入。 */
+.nav-drawer .drawer-item {
+  animation: slide-in-left var(--dur-base) var(--ease-out) backwards;
+}
+.nav-drawer .drawer-item:nth-child(3) { animation-delay: 40ms; }
+.nav-drawer .drawer-item:nth-child(4) { animation-delay: 80ms; }
+.nav-drawer .drawer-item:nth-child(5) { animation-delay: 120ms; }
+.nav-drawer .drawer-item:nth-child(6) { animation-delay: 160ms; }
 .drawer-footer {
   margin-top: auto;
   padding: 12px 16px;

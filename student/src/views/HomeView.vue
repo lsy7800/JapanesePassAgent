@@ -198,6 +198,16 @@ onMounted(() => {
   gap: 18px;
 }
 
+/* ── 分区依次入场 ──
+   四块内容错开 60ms 落位，读起来有从上到下的引导感。
+   backwards 保持首帧透明，避免延迟期间先闪现再动。 */
+.home-wrap > section {
+  animation: fade-up var(--dur-slow) var(--ease-out) backwards;
+}
+.home-wrap > section:nth-child(2) { animation-delay: 60ms; }
+.home-wrap > section:nth-child(3) { animation-delay: 120ms; }
+.home-wrap > section:nth-child(4) { animation-delay: 180ms; }
+
 /* Hero */
 .hero {
   display: flex;
@@ -209,6 +219,9 @@ onMounted(() => {
   border-radius: 14px;
   padding: 24px 26px;
 }
+/* CTA 的箭头 hover 右移，暗示"往前走" */
+.hero-cta :deep(.el-icon) { transition: transform var(--dur-base) var(--ease-out); }
+.hero-cta:hover :deep(.el-icon) { transform: translateX(3px); }
 .hero-text h1 { margin: 0 0 6px; font-size: 24px; color: #422006; }
 .hero-text p { margin: 0; color: #92660e; font-size: 14px; }
 .hero-cta { --el-button-text-color: #422006; --el-button-hover-text-color: #422006; font-weight: 600; }
@@ -221,6 +234,12 @@ onMounted(() => {
   border-radius: 12px;
   padding: 18px;
   text-align: center;
+  transition: transform var(--dur-base) var(--ease-out),
+              box-shadow var(--dur-base) var(--ease-out);
+}
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(245, 158, 11, 0.12);
 }
 .stat-num { font-size: 30px; font-weight: 700; color: #f59e0b; line-height: 1.2; }
 .stat-num small { font-size: 15px; margin-left: 1px; }
@@ -237,12 +256,21 @@ onMounted(() => {
   border-radius: 12px;
   padding: 16px 18px;
   cursor: pointer;
-  transition: all 0.18s;
+  /* 只列需要动的属性：transition:all 会把 background 等一并纳入，
+     hover 时容易和 :active 的 transform 抢时长 */
+  transition: transform var(--dur-base) var(--ease-out),
+              box-shadow var(--dur-base) var(--ease-out),
+              border-color var(--dur-base) var(--ease-out);
 }
 .action-card:hover {
   border-color: #fbbf24;
   box-shadow: 0 4px 14px rgba(245, 158, 11, 0.15);
   transform: translateY(-2px);
+}
+/* 点击时"落回去"，比停在 -2px 更有按下的实感 */
+.action-card:active {
+  transform: translateY(0) scale(0.985);
+  transition-duration: var(--dur-fast);
 }
 .action-icon {
   width: 44px; height: 44px;
@@ -250,11 +278,17 @@ onMounted(() => {
   display: flex; align-items: center; justify-content: center;
   color: #fff; font-size: 22px;
   flex-shrink: 0;
+  transition: transform var(--dur-base) var(--ease-spring);
 }
+.action-card:hover .action-icon { transform: scale(1.08) rotate(-4deg); }
 .action-body { flex: 1; min-width: 0; }
 .action-title { font-weight: 600; color: #303133; }
 .action-desc { font-size: 12px; color: #909399; margin-top: 2px; }
-.action-arrow { color: #c0c4cc; }
+.action-arrow {
+  color: #c0c4cc;
+  transition: transform var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out);
+}
+.action-card:hover .action-arrow { transform: translateX(4px); color: #f59e0b; }
 
 /* 薄弱点 */
 .weak-card {
@@ -266,10 +300,39 @@ onMounted(() => {
 .weak-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .weak-btn { --el-button-text-color: #422006; --el-button-hover-text-color: #422006; font-weight: 600; }
 .weak-list { display: flex; flex-direction: column; gap: 10px; }
-.weak-item { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.weak-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  animation: fade-up var(--dur-base) var(--ease-out) backwards;
+}
+.weak-item:nth-child(2) { animation-delay: 50ms; }
+.weak-item:nth-child(3) { animation-delay: 100ms; }
+.weak-item:nth-child(4) { animation-delay: 150ms; }
+.weak-item:nth-child(5) { animation-delay: 200ms; }
 .weak-name { width: 96px; flex-shrink: 0; color: #303133; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .weak-bar { flex: 1; height: 8px; background: #f0f2f5; border-radius: 4px; overflow: hidden; }
-.weak-bar-fill { height: 100%; background: linear-gradient(90deg, #fbbf24, #f56c6c); border-radius: 4px; }
+/* 进度条从左侧生长。
+   width 由 :style 内联绑定，无法用 transition 触发首次动画（初值即终值），
+   所以用 scaleX 动画：终态 scaleX(1) 就是绑定的 width，与数值无关。 */
+.weak-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #fbbf24, #f56c6c);
+  border-radius: 4px;
+  transform-origin: left center;
+  animation: bar-grow var(--dur-slow) var(--ease-out) backwards;
+}
+/* 与所在行的入场延迟对齐。不能用 animation-delay:inherit —— 它只读直接父级
+   .weak-bar（未设延迟），拿不到 .weak-item 上的值。 */
+.weak-item:nth-child(2) .weak-bar-fill { animation-delay: 50ms; }
+.weak-item:nth-child(3) .weak-bar-fill { animation-delay: 100ms; }
+.weak-item:nth-child(4) .weak-bar-fill { animation-delay: 150ms; }
+.weak-item:nth-child(5) .weak-bar-fill { animation-delay: 200ms; }
+@keyframes bar-grow {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
 .weak-rate { width: 84px; flex-shrink: 0; text-align: right; color: #909399; }
 .weak-empty { color: #c0c4cc; font-size: 13px; text-align: center; padding: 10px 0; }
 

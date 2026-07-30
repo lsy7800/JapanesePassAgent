@@ -55,6 +55,20 @@
   --el-border-radius-base: 8px;
   --el-border-radius-small: 6px;
   --el-border-radius-round: 20px;
+
+  /* ── 动效 token ──
+     统一时长与曲线，避免各页面各写一套导致节奏不一致。
+     fast  按压/hover 这类即时反馈
+     base  展开、切换
+     slow  入场、进度条增长
+     ease-out   减速收尾，用于入场（元素"落位"感）
+     ease-spring 轻微回弹，用于选中/点亮这类需要确认感的状态 */
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
 }
 
 /* 全局字体渲染与排版优化 */
@@ -143,7 +157,122 @@ body {
 .el-card,
 .el-input__wrapper,
 .el-menu-item {
-  transition: all 0.2s ease;
+  transition: all var(--dur-base) var(--ease-out);
+}
+
+/* ── 按压反馈 ──
+   点击时给一个即时的下沉，让"按下去了"这件事有确认感。
+   scale 而非 translateY：按钮宽度不一，缩放的视觉重量更均匀。
+   :active 只在按住期间生效，松手立刻回弹，不影响连点。 */
+.el-button:not(.is-disabled):active {
+  transform: scale(0.96);
+  transition-duration: var(--dur-fast);
+}
+.el-button--primary:not(.is-disabled):hover {
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.28);
+}
+.el-button--primary:not(.is-disabled):active {
+  box-shadow: 0 1px 4px rgba(245, 158, 11, 0.3);
+}
+/* 文字/链接按钮没有边框，缩放会显得飘，改用透明度 */
+.el-button.is-text:not(.is-disabled):active,
+.el-button.is-link:not(.is-disabled):active {
+  transform: none;
+  opacity: 0.6;
+}
+
+/* 可点的 tag（题型示例、知识点筛选）同样给反馈 */
+.el-tag:active {
+  transform: scale(0.95);
+  transition-duration: var(--dur-fast);
+}
+
+/* 单选/复选：选中时轻微回弹，强化"选上了"的确认 */
+.el-radio__input.is-checked .el-radio__inner,
+.el-checkbox__input.is-checked .el-checkbox__inner {
+  animation: pop-check var(--dur-base) var(--ease-spring);
+}
+@keyframes pop-check {
+  0%   { transform: scale(0.8); }
+  100% { transform: scale(1); }
+}
+
+/* 分段控件（手动/AI 组卷切换）：按压反馈 */
+.el-radio-button__inner { transition: all var(--dur-base) var(--ease-out); }
+.el-radio-button:not(.is-disabled) .el-radio-button__inner:active { transform: scale(0.96); }
+
+/* 表格行 hover 加过渡，避免背景色硬切 */
+.el-table tr > td { transition: background-color var(--dur-base) var(--ease-out); }
+
+/* ── 共享入场动画 ──
+   页面/卡片入场统一用这两个，配合 .stagger-* 做序列延迟。 */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes slide-in-left {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ── 路由切换过渡（App.vue 的 <router-view> 用） ──
+   mode="out-in"：旧页面先淡出再进新页面，两者不同时占位，
+   所以不需要 position:absolute（那会让父容器高度塌陷）。
+   离场比入场快一倍，切换的手感是"立刻响应 + 从容落位"。 */
+.page-enter-active { transition: opacity var(--dur-slow) var(--ease-out), transform var(--dur-slow) var(--ease-out); }
+.page-leave-active { transition: opacity var(--dur-fast) var(--ease-in-out); }
+.page-enter-from { opacity: 0; transform: translateY(8px); }
+.page-leave-to { opacity: 0; }
+
+/* ── Element Plus 弹层：默认动画偏生硬，统一换成带位移的淡入 ── */
+/* 关键帧里必须带上 Element Plus 自己的居中位移。
+   .el-message.is-center 靠 left:50% + transform:translate(-50%) 居中，
+   动画期间 transform 被接管，漏掉 -50% 就会整条消息偏到右边。
+   左/右对齐的消息没有这个位移，因此分开写，避免给它们错加 -50%。 */
+.el-message.is-center {
+  animation: msg-in-center var(--dur-slow) var(--ease-spring);
+}
+@keyframes msg-in-center {
+  from { opacity: 0; transform: translate(-50%, -16px) scale(0.96); }
+  to   { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+.el-message.is-left,
+.el-message.is-right {
+  animation: msg-in var(--dur-slow) var(--ease-spring);
+}
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(-16px) scale(0.96); }
+  to   { opacity: 1; transform: none; }
+}
+.el-overlay-dialog .el-message-box {
+  animation: box-in var(--dur-base) var(--ease-out);
+}
+@keyframes box-in {
+  from { opacity: 0; transform: translateY(-12px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ── 无障碍：尊重系统「减弱动态效果」 ──
+   前庭功能敏感的用户会因位移动画产生不适。这里保留颜色/透明度过渡（信息仍然清晰），
+   只把位移与缩放压掉，而不是把 transition 全部归零。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .el-button:active,
+  .el-tag:active,
+  .el-radio-button__inner:active {
+    transform: none !important;
+  }
 }
 
 /* 圆角统一 */
