@@ -28,6 +28,11 @@ export function deleteSession(sessionId) {
   return http.delete(`/sessions/${sessionId}`).then((r) => r.data)
 }
 
+/** 清空当前用户的全部对话记录（考试数据不受影响） */
+export function clearSessions() {
+  return http.delete('/sessions').then((r) => r.data)
+}
+
 /**
  * SSE 流式对话
  * EventSource 不支持自定义 Header，token 通过 query 参数传递。

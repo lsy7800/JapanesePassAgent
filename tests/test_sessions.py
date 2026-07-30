@@ -88,3 +88,77 @@ def test_delete_cross_user_404(client, db, make_user):
     assert client.get(
         f"/api/v1/sessions/{sid}/messages", headers=owner["headers"]
     ).status_code == 200
+
+
+# ========== 清空全部会话 ==========
+
+def test_clear_all_sessions(client, db, make_user):
+    u = make_user()
+    _make_session(db, u["id"])
+    _make_session(db, u["id"])
+    _make_session(db, u["id"])
+
+    r = client.delete("/api/v1/sessions", headers=u["headers"])
+    assert r.status_code == 200
+    assert r.json()["deleted_sessions"] == 3
+    assert client.get("/api/v1/sessions", headers=u["headers"]).json() == []
+
+
+def test_clear_all_only_affects_own_sessions(client, db, make_user):
+    """核心安全约束：不能清掉别人的对话。"""
+    mine = make_user(email="mine@test.com")
+    other = make_user(email="other@test.com")
+    _make_session(db, mine["id"])
+    other_sid = _make_session(db, other["id"])
+
+    r = client.delete("/api/v1/sessions", headers=mine["headers"])
+    assert r.json()["deleted_sessions"] == 1
+    # 别人的会话与消息都还在
+    assert len(client.get("/api/v1/sessions", headers=other["headers"]).json()) == 1
+    assert client.get(
+        f"/api/v1/sessions/{other_sid}/messages", headers=other["headers"]
+    ).status_code == 200
+
+
+def test_clear_all_cascades_messages(client, db, make_user):
+    """会话删除后消息应被外键级联清理，不留孤儿。"""
+    u = make_user()
+    sid = _make_session(db, u["id"])
+    client.delete("/api/v1/sessions", headers=u["headers"])
+
+    db.rollback()
+    with db.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = %s", (sid,))
+        assert cur.fetchone()["n"] == 0
+
+
+def test_clear_all_does_not_touch_exams(client, db, make_user):
+    """清空对话不该影响考试数据——两者之间没有任何关联。"""
+    u = make_user()
+    _make_session(db, u["id"])
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO exams (user_id, level, total, status) VALUES (%s,'N1',5,'submitted')",
+            (u["id"],),
+        )
+        exam_id = cur.lastrowid
+    db.commit()
+
+    client.delete("/api/v1/sessions", headers=u["headers"])
+
+    db.rollback()
+    with db.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM exams WHERE id = %s", (exam_id,))
+        assert cur.fetchone()["n"] == 1, "清空对话竟然删掉了考试记录"
+
+
+def test_clear_all_empty_is_not_an_error(client, make_user):
+    """没有会话时返回 0，而不是报错。"""
+    u = make_user()
+    r = client.delete("/api/v1/sessions", headers=u["headers"])
+    assert r.status_code == 200
+    assert r.json()["deleted_sessions"] == 0
+
+
+def test_clear_all_requires_auth(client):
+    assert client.delete("/api/v1/sessions").status_code == 401

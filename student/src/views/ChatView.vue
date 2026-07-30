@@ -3,7 +3,13 @@ import { ref, nextTick, onMounted } from 'vue'
 import { marked } from 'marked'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, Plus, Delete, ChatLineRound, Loading } from '@element-plus/icons-vue'
-import { chatStream, listSessions, getSessionMessages, deleteSession } from '../api/agent'
+import {
+  chatStream,
+  listSessions,
+  getSessionMessages,
+  deleteSession,
+  clearSessions,
+} from '../api/agent'
 import { downloadExam } from '../api/exam'
 import { toolLabel } from '../utils/toolLabels'
 
@@ -29,6 +35,7 @@ const listRef = ref(null)
 const downloading = ref(false)
 const sessions = ref([])
 const loadingHistory = ref(false)
+const clearingAll = ref(false)
 
 let streamingIdx = -1
 let closeStream = null
@@ -81,6 +88,41 @@ async function onDeleteSession(sid) {
     ElMessage.success('已删除')
   } catch (e) {
     ElMessage.error('删除失败：' + (e.response?.data?.detail || e.message))
+  }
+}
+
+/** 清空全部对话记录。考试数据与题库不受影响，文案里说清楚以免用户误解。 */
+async function onClearAll() {
+  if (sessions.value.length === 0) {
+    ElMessage.info('没有对话记录可清空')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `将删除全部 ${sessions.value.length} 个会话及其消息，不可恢复。` +
+      '（你的考试记录与成绩不受影响）',
+      '清空全部对话',
+      {
+        type: 'error',
+        confirmButtonText: '我确定，全部删除',
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return // 用户取消
+  }
+
+  clearingAll.value = true
+  try {
+    const r = await clearSessions()
+    sessions.value = []
+    newSession()  // 复位当前对话，否则界面还停在一个已被删掉的会话上
+    ElMessage.success(`已清空 ${r.deleted_sessions} 个会话`)
+  } catch (e) {
+    ElMessage.error('清空失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    clearingAll.value = false
   }
 }
 
@@ -214,6 +256,18 @@ onMounted(refreshSessions)
         </div>
         <div v-if="sessions.length === 0" class="session-empty">暂无历史会话</div>
       </div>
+      <!-- 清空按钮放列表底部：与「新会话」拉开距离，降低误点概率 -->
+      <el-button
+        v-if="sessions.length"
+        class="clear-btn"
+        size="small"
+        text
+        type="danger"
+        :loading="clearingAll"
+        @click="onClearAll"
+      >
+        <el-icon style="margin-right: 4px"><Delete /></el-icon>清空全部对话
+      </el-button>
     </aside>
 
     <!-- 对话主区 -->
@@ -312,6 +366,14 @@ onMounted(refreshSessions)
   overscroll-behavior: contain;
   margin: 0 -6px;
   padding: 0 6px;
+}
+/* 清空按钮固定在侧栏底部，与列表用分隔线隔开 */
+.clear-btn {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #f0f0f0;
+  width: 100%;
+  border-radius: 0;
 }
 .session-item {
   display: flex;

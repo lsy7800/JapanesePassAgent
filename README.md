@@ -272,6 +272,14 @@ POST 版本期间前端只能干等，故另提供 SSE 版本逐阶段推送进�
 |------|------|------|------|
 | POST | `/agent/chat` | 同步对话 | 登录 |
 | GET | `/agent/stream` | SSE 流式对话（token 通过 query 传递） | 登录 |
+| GET | `/sessions` | 会话列表 | 登录 |
+| GET | `/sessions/{id}/messages` | 某会话的全部消息 | 归属用户 |
+| PATCH | `/sessions/{id}` | 重命名会话 | 归属用户 |
+| DELETE | `/sessions/{id}` | 删除单个会话（消息级联） | 归属用户 |
+| DELETE | `/sessions` | 清空自己的全部对话记录 | 登录 |
+
+`DELETE /sessions` 的 `user_id` 取自 JWT、不接受调用方指定，避免越权清空他人对话。
+清空对话**不影响考试数据**——`exams` 与会话之间没有任何关联。
 
 SSE 事件格式：
 ```json

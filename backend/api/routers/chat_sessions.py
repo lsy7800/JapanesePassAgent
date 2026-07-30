@@ -4,6 +4,7 @@ GET    /api/v1/sessions              当前用户的会话列表
 GET    /api/v1/sessions/{id}/messages 某会话的全部消息（含归属校验）
 PATCH  /api/v1/sessions/{id}          重命名会话
 DELETE /api/v1/sessions/{id}          删除会话（消息级联删除）
+DELETE /api/v1/sessions               清空当前用户的全部会话
 """
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -46,6 +47,20 @@ def rename_session(
             (session_id,),
         )
         return cur.fetchone()
+
+
+@router.delete("")
+def clear_sessions(conn=Depends(get_db), current_user=Depends(get_current_user)):
+    """清空当前用户的全部对话记录。
+
+    只删自己的：user_id 取自 JWT，不接受调用方指定，避免越权清空他人对话。
+    chat_messages 由外键 ON DELETE CASCADE 一并清理。
+    考试数据与题库不受影响——exams 与会话之间没有任何关联。
+    """
+    with conn.cursor() as cur:
+        deleted = chat_repo.delete_all_sessions(cur, current_user["id"])
+        conn.commit()
+    return {"ok": True, "deleted_sessions": deleted}
 
 
 @router.delete("/{session_id}")

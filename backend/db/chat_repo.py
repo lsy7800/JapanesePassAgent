@@ -117,3 +117,12 @@ def delete_session(cur, session_id: int, user_id: int) -> bool:
         (session_id, user_id),
     )
     return cur.rowcount > 0
+
+
+def delete_all_sessions(cur, user_id: int) -> int:
+    """清空该用户的全部会话，返回删除的会话数（消息由外键 CASCADE 一并删除）。
+
+    只删自己的：user_id 由调用方从 JWT 取，不接受请求方指定，避免越权清空他人对话。
+    """
+    cur.execute("DELETE FROM chat_sessions WHERE user_id = %s", (user_id,))
+    return cur.rowcount
