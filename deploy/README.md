@@ -128,6 +128,102 @@ docker compose -f docker-compose.prod.yml up -d --build nginx
 >   docker compose -f docker-compose.prod.yml up -d --build nginx
 > ```
 
+## 80 端口已被占用时
+
+如果服务器上已经跑着别的 nginx（或任何占用 80 的服务），本项目的 nginx 容器会因
+端口冲突起不来（`bind: address already in use`）。两种解法。
+
+### 方案 A：让已有的 nginx 反代过来（推荐）
+
+本项目 nginx 换个不冲突的宿主机端口，只监听本机；已有的 nginx 作为唯一入口。
+好处是 80 仍由原来那套统管，将来上 HTTPS 也只需在它上面配证书。
+
+`.env` 里加：
+
+```env
+HTTP_PORT=8000
+```
+
+再把宿主机端口绑到本机（避免 8000 直接暴露公网）—— 编辑 `docker-compose.prod.yml`：
+
+```yaml
+      - "127.0.0.1:${HTTP_PORT:-80}:80"
+```
+
+然后在**已有的** nginx 里加一个 server 块：
+
+```nginx
+server {
+    listen 80;
+    server_name <你的IP或域名>;
+
+    # SSE 两个端点必须关缓冲，否则 AI 对话不是逐字输出
+    location /api/v1/agent/stream {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 600s;
+        access_log off;    # JWT 走 query string，别记进日志
+    }
+    location /api/v1/exams/smart-generate/stream {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 600s;
+        access_log off;
+    }
+
+    # 其余全部（静态资源、/api、SPA fallback 都由容器内的 nginx 处理）
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_read_timeout 120s;
+    }
+}
+```
+
+`nginx -t && systemctl reload nginx` 生效。之后访问 `http://<IP>/` 即可。
+
+> **两层 nginx 不是浪费**：容器内那层管 SPA fallback、静态资源缓存、`/api` 与 SSE 的
+> 分流规则，这些配置跟着镜像走；外层只做一次转发。想省掉内层就得把
+> `deploy/nginx.conf` 的规则全部手抄到外层，还得把 `dist/` 产物挂出来，
+> 反而更难维护。
+>
+> **`access_log off` 别漏**：SSE 的 JWT 走 query string（EventSource 不能设自定义头）
+> 且有效期 7 天，外层 nginx 会把它原样记进访问日志。
+
+### 方案 B：直接换个端口对外
+
+最省事，但访问地址得带端口，且和已有服务共存时容易混。
+
+```env
+HTTP_PORT=8000
+```
+
+访问 `http://<IP>:8000/`。记得在云主机安全组放行 8000。
+
+### 后台管理端口
+
+无论哪种方案，后台管理仍是 `127.0.0.1:8080`，走 SSH 隧道访问，不受影响。
+若 8080 也被占用，改 `docker-compose.prod.yml` 里那行的宿主机侧端口即可。
+
 ## 后台管理的访问方式
 
 后台管理默认**只绑 `127.0.0.1:8080`**，公网访问不到。这是有意的：它能改用户角色、
