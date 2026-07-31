@@ -1,9 +1,13 @@
-# 防止 .env 等敏感文件被 COPY 进镜像（.env 里有 DEEPSEEK_API_KEY / JWT_SECRET / DB_PASSWORD）
-.env
-.env.*
+# 防止 .env 等敏感文件被 COPY 进镜像（根 .env 有 DEEPSEEK_API_KEY / JWT_SECRET /
+# DB_PASSWORD；student/.env 有 VITE_AUDIO_BASE_URL）。
+#
+# 注意 **/ 前缀不能省：.dockerignore 的模式锚定在上下文根，裸写 `.env` 只匹配
+# 根目录那个，匹配不到 student/.env。而前端镜像会 COPY student/ 整个目录。
+**/.env
+**/.env.*
 !.env.example
-*.pem
-*.key
+**/*.pem
+**/*.key
 
 # 版本库与本地环境
 .git
@@ -18,16 +22,23 @@ __pycache__/
 .claude/
 .DS_Store
 
-# 前端由 nginx 阶段单独构建，后端镜像不需要
+# 依赖与构建产物。
+#
+# 注意：这里不能排除 frontend/ 和 student/ 整个目录——Docker 对一个构建上下文
+# 只认这一份 .dockerignore，而 deploy/Dockerfile.frontend 用的是同一个上下文，
+# 排掉就会报 failed to compute cache key: "/frontend": not found。
+# 两个前端源码合计约 500KB，留着对后端镜像无实质影响（Dockerfile 只 COPY
+# backend/ crawler/ scripts/，不会把它们打进后端镜像层）。
 node_modules/
-frontend/
-student/
+frontend/node_modules/
+student/node_modules/
+frontend/dist/
+student/dist/
 
 # 本地数据产物：题库源 JSON 和爬虫 cookie，运行时不用（API 只读 MySQL）
 data/
 
-# 文档与测试
+# 文档与测试：镜像里不需要
 docs/
 tests/
-README.md
-*.md
+**/*.md
