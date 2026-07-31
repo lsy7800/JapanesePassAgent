@@ -22,6 +22,9 @@ from langgraph.prebuilt import create_react_agent
 from crawler.config import DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, require
 from backend.agent.tools import ALL_TOOLS
 from backend.db import chat_repo
+from backend.utils.logging_config import get_logger
+
+logger = get_logger("backend.agent.graph")
 
 SYSTEM_PROMPT = """你是一位专业的日语能力考试（JLPT）辅导专家，熟悉 N1~N5 各级别考纲。
 
@@ -174,8 +177,16 @@ async def stream_agent(
                 tool_input = event["data"].get("input", {})
                 yield f"data: {json.dumps({'type': 'tool', 'name': tool_name, 'args': tool_input}, ensure_ascii=False)}\n\n"
 
-    except Exception as e:
-        yield f"data: {json.dumps({'type': 'error', 'detail': str(e)}, ensure_ascii=False)}\n\n"
+    except Exception:
+        # 堆栈进服务端日志；只给前端一句通用提示。
+        # 之前是 detail=str(e)，会把上游 API 报错体或 DB 连接信息推到浏览器，
+        # 而服务端什么都不留——Agent 故障在运维上等于不可见。
+        logger.exception(
+            "Agent 流式对话失败",
+            extra={"user_id": user_id, "session_id": session_id},
+        )
+        detail = "AI 处理失败，请稍后重试"
+        yield f"data: {json.dumps({'type': 'error', 'detail': detail}, ensure_ascii=False)}\n\n"
     finally:
         # 无论正常结束还是中途出错，已产出的回复都尽量落库
         _save_reply(session_id, "".join(reply_parts))

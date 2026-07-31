@@ -25,3 +25,8 @@ data/
 node_modules/
 frontend/dist/
 student/dist/
+
+# 生产部署的本地产物：听力音频目录（由 nginx 挂载伺服）、TLS 证书、数据库备份
+audio/
+deploy/certs/
+*.sql.gz

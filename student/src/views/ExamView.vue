@@ -11,6 +11,8 @@ import {
   smartGenerateExamStream,
 } from '../api/exam'
 import { audioUrl } from '../utils/audio'
+import { collapseEnter, collapseLeave } from '../utils/collapse'
+import { sanitizeArticle, sanitizeContent } from '../utils/sanitize'
 
 const router = useRouter()
 const route = useRoute()
@@ -152,6 +154,8 @@ function jumpTo(no) {
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
+// 答题卡展开/收起的高度过渡由 utils/collapse.js 提供（与学习分析页的错题详情共用）
+
 // 滚动监听追踪当前题：滚动容器是 .app-main（非 window），
 // 用捕获阶段监听 scroll 才能捕捉到内层容器的滚动事件。
 let scrollRaf = null
@@ -245,7 +249,7 @@ function renderContent(content, marked) {
     s = s
       .replace(/＿★＿/g, '<span class="sort-slot sort-slot--star"><i>★</i></span>')
       .replace(/＿＿/g, '<span class="sort-slot"></span>')
-    return s.replace(/\n/g, '<br/>')
+    return sanitizeContent(s.replace(/\n/g, '<br/>'))
   }
   // 划线词若只是空格括号占位符（填空题的空），不加横线，避免给括号划线
   if (marked && String(marked).replace(/[（）()[\]\s　]/g, '')) {
@@ -253,10 +257,12 @@ function renderContent(content, marked) {
     s = s.replace(new RegExp(esc, 'g'), (m) => `<u class="marked-word">${m}</u>`)
   }
   // 保留换行
-  return s.replace(/\n/g, '<br/>')
+  return sanitizeContent(s.replace(/\n/g, '<br/>'))
 }
 
 // 渲染文章（完形/阅读）：保护 HTML 块 → 转义纯文本 → 还原 HTML 块 → 处理标记
+// 第 1/7 步刻意放行 DB 里的 <table> 原始 HTML，那部分未经过滤，
+// 所以最终结果必须过 sanitizeArticle
 function renderArticle(article) {
   if (article == null) return ''
   let s = String(article)
@@ -292,7 +298,7 @@ function renderArticle(article) {
   // 7. 还原 HTML 块
   s = s.replace(/\x00HTML(\d+)\x00/g, (_, i) => htmlBlocks[Number(i)])
 
-  return s.replace(/\n/g, '<br/>')
+  return sanitizeArticle(s.replace(/\n/g, '<br/>'))
 }
 
 function fmtTime(sec) {
@@ -496,6 +502,9 @@ onUnmounted(() => {
         </div>
       </template>
 
+      <!-- :key="mode" 让切换时整块重建，从而重放淡入动画。
+           表单数据都在 config / ai 两个 reactive 对象里，重建不丢状态。 -->
+      <div :key="mode" class="config-body">
       <!-- 手动组卷 -->
       <el-form v-show="mode === 'manual'" label-position="top" class="config-form">
         <div class="form-row">
@@ -623,6 +632,7 @@ onUnmounted(() => {
           </div>
         </div>
       </el-form>
+      </div>
     </el-card>
 
     <!-- 答题阶段 -->
@@ -642,22 +652,28 @@ onUnmounted(() => {
             </el-button>
             <el-button type="primary" size="small" :loading="loading" @click="onSubmit">交卷</el-button>
           </div>
-          <!-- 答题卡：题号网格（以全局子题号 no 为单位） -->
-          <div v-show="showSheet" class="answer-sheet">
-            <button
-              v-for="q in allQuestions"
-              :key="q.no"
-              type="button"
-              class="chip"
-              :class="chipClass(q.no)"
-              @click="jumpTo(q.no)"
-            >{{ q.no }}</button>
-          </div>
-          <div v-show="showSheet" class="sheet-legend">
-            <span><i class="dot answered"></i>已答</span>
-            <span><i class="dot"></i>未答</span>
-            <span><i class="dot flagged"></i>标记</span>
-          </div>
+          <!-- 答题卡：题号网格（以全局子题号 no 为单位）。
+               展开/收起用 <transition> 而非 v-show，避免高度骤变把下方内容顶动。
+               内容高度不定（题数从 5 到 60+），所以在 JS 钩子里量出实际高度写进 CSS 变量。 -->
+          <transition name="sheet" @enter="collapseEnter" @leave="collapseLeave">
+            <div v-show="showSheet" class="sheet-collapse">
+              <div class="answer-sheet">
+                <button
+                  v-for="q in allQuestions"
+                  :key="q.no"
+                  type="button"
+                  class="chip"
+                  :class="chipClass(q.no)"
+                  @click="jumpTo(q.no)"
+                >{{ q.no }}</button>
+              </div>
+              <div class="sheet-legend">
+                <span><i class="dot answered"></i>已答</span>
+                <span><i class="dot"></i>未答</span>
+                <span><i class="dot flagged"></i>标记</span>
+              </div>
+            </div>
+          </transition>
         </div>
       </el-affix>
 
@@ -679,11 +695,14 @@ onUnmounted(() => {
         </div>
       </el-alert>
 
+      <!-- 入场延迟按下标递增，只错开前 6 张：整场卷有 40+ 张，
+           线性递增会让末尾等好几秒才出现 -->
       <el-card
-        v-for="item in exam.items"
+        v-for="(item, idx) in exam.items"
         :key="item.group_id"
         shadow="never"
         class="q-card"
+        :style="{ animationDelay: `${Math.min(idx, 6) * 40}ms` }"
       >
         <!-- 听力题：音频播放器（答题时不显示原文脚本，避免泄题） -->
         <div v-if="item.audio_url" class="q-audio">
@@ -747,6 +766,8 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 .config-form { max-width: 560px; }
+/* 手动/AI 模式切换：整块淡入上移，替代此前的瞬间替换 */
+.config-body { animation: fade-up var(--dur-base) var(--ease-out); }
 .ai-hint {
   font-size: 13px;
   color: #909399;
@@ -761,8 +782,13 @@ onUnmounted(() => {
   flex-wrap: wrap;
   gap: 8px;
 }
-.ai-example { cursor: pointer; transition: all 0.15s; }
-.ai-example:hover { border-color: #f59e0b; color: #b45309; }
+.ai-example {
+  cursor: pointer;
+  transition: transform var(--dur-base) var(--ease-out),
+              border-color var(--dur-base) var(--ease-out),
+              color var(--dur-base) var(--ease-out);
+}
+.ai-example:hover { border-color: #f59e0b; color: #b45309; transform: translateY(-1px); }
 
 /* AI 组卷进度时间线 */
 .ai-progress {
@@ -770,7 +796,9 @@ onUnmounted(() => {
   padding: 12px 14px;
   background: #fbf9f4;
   border-radius: 8px;
+  animation: fade-up var(--dur-base) var(--ease-out);
 }
+/* 每个新阶段滑入，让"又推进了一步"看得见 */
 .ai-stage {
   display: flex;
   align-items: flex-start;
@@ -779,6 +807,8 @@ onUnmounted(() => {
   line-height: 1.6;
   padding: 3px 0;
   color: #909399;
+  animation: slide-in-left var(--dur-base) var(--ease-out);
+  transition: color var(--dur-base) var(--ease-out);
 }
 .ai-stage.doing { color: #b45309; font-weight: 600; }
 .ai-stage.done { color: #67c23a; }
@@ -788,19 +818,22 @@ onUnmounted(() => {
   height: 21px;   /* 与 13px×1.6 行高对齐，避免图标偏上 */
   flex-shrink: 0;
 }
+/* loading → ✓ 是两个组件互换，无法过渡，改为对新出现的 ✓ 做一次回弹 */
+.ai-stage.done .ai-stage-icon { animation: pop-check var(--dur-base) var(--ease-spring); }
 .ai-stage-text { color: #606266; }
 .ai-stage.doing .ai-stage-text { color: #b45309; }
 .ai-plan {
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px dashed #e4d9c3;
+  animation: fade-up var(--dur-slow) var(--ease-out);
 }
 .ai-plan-label { font-size: 12px; color: #f59e0b; font-weight: 600; margin-bottom: 4px; }
 .ai-plan-body { font-size: 13px; font-weight: 600; color: #303133; }
 .ai-plan-why { font-size: 12px; color: #909399; line-height: 1.6; margin-top: 4px; }
 
 /* AI 组卷说明条 */
-.rationale-alert { margin-bottom: 14px; }
+.rationale-alert { margin-bottom: 14px; animation: fade-up var(--dur-slow) var(--ease-out); }
 .rationale-title { font-weight: 600; }
 .rationale-body { font-size: 13px; line-height: 1.6; }
 .rationale-short { font-size: 12px; color: #b45309; margin-top: 4px; }
@@ -825,6 +858,7 @@ onUnmounted(() => {
   border-bottom: 1px solid #ebeef5;
   box-shadow: 0 2px 8px rgba(0,0,0,.05);
 }
+.answer-bar { transition: box-shadow var(--dur-base) var(--ease-out); }
 .answer-bar.low-time { box-shadow: 0 2px 10px rgba(245,108,108,.35); }
 .bar-top {
   display: flex;
@@ -844,6 +878,16 @@ onUnmounted(() => {
 }
 .sheet-toggle { padding: 0 4px; }
 
+/* 答题卡折叠容器：高度由 JS 钩子写入内联样式，这里只负责过渡与裁剪。
+   opacity 一起动，收起时不会出现"内容被切一半"的观感。 */
+.sheet-collapse {
+  overflow: hidden;
+  transition: height var(--dur-base) var(--ease-in-out),
+              opacity var(--dur-base) var(--ease-in-out);
+}
+.sheet-enter-from,
+.sheet-leave-to { opacity: 0; }
+
 /* 答题卡：题号网格 */
 .answer-sheet {
   display: flex;
@@ -862,15 +906,31 @@ onUnmounted(() => {
   color: #606266;
   font-size: 13px;
   cursor: pointer;
-  transition: all 0.15s;
+  /* transform 单列且用回弹曲线：.current 的放大要有"跳上来"的感觉；
+     其余属性走标准曲线 */
+  transition: transform var(--dur-base) var(--ease-spring),
+              background-color var(--dur-base) var(--ease-out),
+              border-color var(--dur-base) var(--ease-out),
+              color var(--dur-base) var(--ease-out),
+              box-shadow var(--dur-base) var(--ease-out);
   padding: 0;
 }
-.chip:hover { border-color: #fbbf24; }
+.chip:hover { border-color: #fbbf24; transform: translateY(-1px); }
+.chip:active { transform: scale(0.9); transition-duration: var(--dur-fast); }
 .chip.answered {
   background: #f59e0b;
   border-color: #f59e0b;
   color: #fff;
   font-weight: 600;
+}
+/* 刚答完的题号点亮时弹一下，给"这题记上了"的即时确认。
+   选择器只挂在 .answered 上：若写成 .answered:not(.current)，滚动时 .current
+   在题号间移动，每个"失去 current 的已答题"都会重新匹配并重放动画 → 滚动一路乱弹。 */
+.chip.answered { animation: chip-mark var(--dur-base) var(--ease-spring); }
+@keyframes chip-mark {
+  0%   { transform: scale(1); }
+  45%  { transform: scale(1.18); }
+  100% { transform: scale(1); }
 }
 .chip.flagged {
   border-color: #e6a23c;
@@ -884,6 +944,8 @@ onUnmounted(() => {
   font-weight: 700;
   z-index: 1;
 }
+/* current 与 hover 的 transform 冲突时以 current 为准，避免抬起的题号被 hover 压回 */
+.chip.current:hover { transform: translateY(-2px) scale(1.08); }
 .sheet-legend {
   display: flex;
   gap: 16px;
@@ -902,6 +964,9 @@ onUnmounted(() => {
 .q-card {
   margin-top: 14px;
   scroll-margin-top: 160px; /* 跳转时避开粘性答题栏 */
+  /* 试卷生成后题卡依次落位；延迟由模板按 v-for 下标内联绑定。
+     不用 nth-child —— 同级还有 el-affix 与说明条，序号会随它们出现/消失而错位。 */
+  animation: fade-up var(--dur-slow) var(--ease-out) backwards;
 }
 /* 听力题音频播放器 */
 .q-audio {
@@ -972,6 +1037,13 @@ onUnmounted(() => {
 .q-spacer { flex: 1; }
 .flag-btn { color: #909399; }
 .flag-btn.active { color: #e6a23c; font-weight: 600; }
+/* 标记生效时旗子弹一下 */
+.flag-btn.active :deep(.el-icon) { animation: flag-wave var(--dur-slow) var(--ease-spring); }
+@keyframes flag-wave {
+  0%   { transform: scale(1) rotate(0); }
+  40%  { transform: scale(1.25) rotate(-12deg); }
+  100% { transform: scale(1) rotate(0); }
+}
 .q-content { font-size: 15px; line-height: 1.9; margin-bottom: 16px; word-break: break-word; }
 
 /* 排序题空位槽（grammar_order） */
@@ -1022,15 +1094,24 @@ onUnmounted(() => {
   line-height: 1.7;
   white-space: normal;
   align-items: flex-start; /* 圆圈顶部对齐首行，多行文本不再居中 */
-  transition: all 0.2s;
+  transition: transform var(--dur-base) var(--ease-out),
+              background-color var(--dur-base) var(--ease-out),
+              border-color var(--dur-base) var(--ease-out),
+              box-shadow var(--dur-base) var(--ease-out);
 }
 .q-option:hover {
   border-color: #fbbf24;
   background: #fffbeb;
+  transform: translateX(2px);
+}
+.q-option:active {
+  transform: scale(0.99);
+  transition-duration: var(--dur-fast);
 }
 .q-option.is-checked {
   border-color: #f59e0b;
   background: #fff7e6;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1);
 }
 .q-option :deep(.el-radio__label) {
   padding-left: 8px;

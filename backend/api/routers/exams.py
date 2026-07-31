@@ -19,6 +19,7 @@ from backend.api.deps import auth_by_query_token, get_db, get_current_user
 from backend.api.exam_export import VALID_MODES, render_exam_markdown
 from backend.services.exam_builder import persist_exam
 from backend.services.smart_exam import NoQuestionsError, run_smart_exam, stream_smart_exam
+from backend.utils.ratelimit import limit_llm_by_user
 from backend.schemas.exam import (
     ExamGenerateRequest,
     ExamHistoryResponse,
@@ -213,6 +214,7 @@ def smart_generate(
     流程：薄弱点聚合 → LLM 规划（内部已兜底，绝不因 LLM 异常而挂）→ 确定性建卷 → 返回不含答案的试卷 + 组卷说明。
     LLM 规划通常十几秒，期间前端只能干等；需要阶段化进度时改用 /smart-generate/stream。
     """
+    limit_llm_by_user(current_user["id"])
     try:
         result = run_smart_exam(
             payload.requirement, payload.level, payload.time_limit_minutes,
@@ -244,6 +246,8 @@ async def smart_generate_stream(
     的组卷思路而不是干等转圈。前端收到 done 后再用 GET /exams/{id} 取试卷正文。
     """
     user_id = auth_by_query_token(token, conn)
+    # 限流放在认证之后：先确认身份才能按用户计数
+    limit_llm_by_user(user_id)
 
     async def gen():
         async for event in stream_smart_exam(requirement, level, time_limit_minutes, user_id):

@@ -69,6 +69,20 @@ def _test_db():
 
 
 @pytest.fixture(autouse=True)
+def _reset_ratelimit():
+    """每个用例前清空限流计数。
+
+    限流器是进程内全局状态（backend/utils/ratelimit.py），不清会跨用例累加：
+    LLM 端点默认 10 次/分钟，跑到第 11 个组卷用例就开始返回 429，
+    表现为 KeyError: 'id' 这类让人摸不着头脑的失败。
+    """
+    from backend.utils.ratelimit import reset_all
+
+    reset_all()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _clean_tables():
     """每个用例前清空所有表，保证隔离。"""
     conn = _connect()

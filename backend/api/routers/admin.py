@@ -18,8 +18,11 @@ from backend.schemas.admin import (
     UserUpdateRequest,
 )
 from backend.schemas.stats import WeakPoint, WeakPointsResponse
+from backend.utils.logging_config import get_logger
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+
+logger = get_logger("backend.admin")
 
 
 def _parse_kp(raw) -> list:
@@ -204,6 +207,18 @@ def update_user(
         )
         r = cur.fetchone()
     conn.commit()
+
+    # 审计：改角色和停用账号是权限敏感操作，必须留痕（谁改了谁、改成什么）
+    if sets:
+        logger.info(
+            "管理员修改用户",
+            extra={
+                "actor_id": admin["id"],
+                "target_user_id": user_id,
+                "new_role": payload.role,
+                "new_is_active": payload.is_active,
+            },
+        )
 
     return UserAdminOut(
         id=r["id"],

@@ -4,6 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
 import { login, register } from '../api/auth'
+import { collapseEnter, collapseLeave } from '../utils/collapse'
 
 const router = useRouter()
 const route = useRoute()
@@ -58,9 +59,14 @@ async function submit() {
         <el-form-item label="密码">
           <el-input v-model="form.password" type="password" placeholder="至少6位" show-password size="large" @keydown.enter="submit" />
         </el-form-item>
-        <el-form-item v-if="mode === 'register'" label="确认密码">
-          <el-input v-model="form.confirm" type="password" placeholder="再输一次" show-password size="large" @keydown.enter="submit" />
-        </el-form-item>
+        <!-- 切到注册时"确认密码"展开而非突然插入，卡片高度变化不跳 -->
+        <transition name="confirm" @enter="collapseEnter" @leave="collapseLeave">
+          <div v-if="mode === 'register'" class="confirm-wrap">
+            <el-form-item label="确认密码">
+              <el-input v-model="form.confirm" type="password" placeholder="再输一次" show-password size="large" @keydown.enter="submit" />
+            </el-form-item>
+          </div>
+        </transition>
         <el-button type="primary" :loading="loading" size="large" class="submit-btn" @click="submit">
           {{ mode === 'login' ? '登录' : '注册' }}
         </el-button>
@@ -97,6 +103,11 @@ async function submit() {
   border-radius: 20px;
   padding: 40px 36px 32px;
   box-shadow: 0 20px 60px rgba(245, 158, 11, 0.18), 0 4px 12px rgba(15, 23, 42, 0.06);
+  animation: card-in 0.42s var(--ease-out);
+}
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
 }
 .brand-mark {
   width: 56px;
@@ -108,6 +119,7 @@ async function submit() {
   align-items: center;
   justify-content: center;
   box-shadow: 0 8px 20px rgba(245, 158, 11, 0.35);
+  animation: pop-check 0.42s var(--ease-spring) 100ms backwards;
 }
 .login-title {
   text-align: center;
@@ -128,6 +140,15 @@ async function submit() {
   color: #475569;
   padding-bottom: 4px;
 }
+/* 高度由 collapse.js 钩子写入内联样式；这里只负责裁剪与过渡。
+   el-form-item 自带 margin-bottom，放在内层不影响 height:0 的收拢。 */
+.confirm-wrap {
+  overflow: hidden;
+  transition: height var(--dur-base) var(--ease-in-out),
+              opacity var(--dur-base) var(--ease-in-out);
+}
+.confirm-enter-from,
+.confirm-leave-to { opacity: 0; }
 .submit-btn {
   width: 100%;
   margin-top: 6px;

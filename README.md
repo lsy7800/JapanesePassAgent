@@ -211,14 +211,20 @@ Base URL: `/api/v1`
 
 | 方法 | 路径 | 说明 | 权限 |
 |------|------|------|------|
-| GET | `/sources` | 题库批次列表及题数 | 公开 |
-| GET | `/questions` | 题目列表（分页 + 多维筛选） | 公开 |
-| GET | `/questions/{id}` | 完整题组（含子题和选项） | 公开 |
+| GET | `/categories` | 题型列表（级别→题型联动） | 登录 |
+| GET | `/sources` | 题库批次列表及题数 | admin |
+| GET | `/questions` | 题目列表（分页 + 多维筛选） | admin |
+| GET | `/questions/{id}` | 完整题组（含子题和选项） | admin |
 | POST | `/questions` | 创建题组 | admin |
 | PUT | `/questions/{id}` | 全量替换题组 | admin |
 | DELETE | `/questions/{id}` | 删除题组 | admin |
 
 GET `/questions` 支持参数：`type` / `level` / `difficulty_min` / `difficulty_max` / `knowledge_point` / `source` / `page` / `page_size`
+
+> **为什么题库读接口是 admin 而不是公开**：`/questions/{id}` 的响应含 `answer` 和
+> `analysis`，公开意味着学生考试中开个新标签就能查答案。这三个端点只有后台校对
+> 界面在用，学生端做题走 `/exams`（`ExamItemOut` 刻意不含答案字段）。
+> `/categories` 是两端共用的元数据，只要求登录。回归测试见 `tests/test_questions.py`。
 
 ### 考试
 
@@ -430,16 +436,18 @@ uv run python -m crawler.spiders.write_to_mysql
 
 ### 8. 运行测试
 
-后端测试基于 pytest，共 63 项：
+后端测试基于 pytest，共 142 项：
 
 | 文件 | 覆盖 |
 |------|------|
 | `test_security.py` / `test_auth.py` | 密码哈希、JWT 签发校验、注册登录、角色权限 |
 | `test_sessions.py` / `test_chat_repo.py` | 会话持久化与越权校验 |
-| `test_questions.py` | 题库读接口 |
+| `test_questions.py` | 题库读接口 + **鉴权**（详情含答案，学生不可读） |
 | `test_cloze_exam.py` / `test_whole_exam.py` | 完形题组卷、整场真题组卷 |
 | `test_smart_exam.py` | AI 智能组卷：同步路径 + SSE 阶段序列、冷启动、空题池、规划器异常兜底 |
 | `test_reingest_idempotent.py` | 重新入库幂等性、**历史试卷与作答记录不被破坏** |
+| `test_prod_hardening.py` | 生产收敛：CORS 白名单不回落成 `*`、`/docs` 关闭 |
+| `test_logging_ratelimit.py` | 日志脱敏（SSE token 不入日志）、异常不外泄、限流、审计 |
 
 ```bash
 uv run pytest
@@ -447,6 +455,39 @@ uv run pytest
 
 > 测试会自动创建独立库 `jlpt_test`（用 `SHOW CREATE TABLE` 从当前库克隆结构，含外键），
 > 用完即 `DROP`，**不触碰真实 `jlpt` 数据**；无需联网、不调用 DeepSeek。
+
+前端（学生端）有 56 项 XSS 消毒回归测试：
+
+```bash
+cd student && npm test
+```
+
+> 所有 `v-html` 出口都必须过 `student/src/utils/sanitize.js`。改动 `renderArticle` /
+> `renderContent` / `renderMd` 时注意**每个 return 分支都要消毒**，包括提前返回的那些。
+
+---
+
+## 生产部署
+
+整套服务由 `docker-compose.prod.yml` 编排（MySQL + 后端 + nginx 含两个前端产物），
+完整步骤见 **[`deploy/README.md`](deploy/README.md)**。
+
+```bash
+cp .env.example .env    # 填 ENV=production、ALLOWED_ORIGINS、JWT_SECRET、DB_PASSWORD、DEEPSEEK_API_KEY
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+几个容易踩的点：
+
+- **`ENV=production`** 会收敛 CORS（只允许 `ALLOWED_ORIGINS` 列出的来源）并关闭
+  `/docs`、`/redoc`、`/openapi.json`。`ALLOWED_ORIGINS` 必须与 `deploy/nginx.conf`
+  的 `server_name` 一致。留空时不挂 CORS 中间件（同域部署适用），**任何情况都不会回落成 `*`**。
+- **建表要两步**：`schema.sql` 不含 `chat_sessions` / `chat_messages`，还得跑
+  `python -m scripts.migrate_chat`，否则 AI 对话不可用。
+- **听力音频**：源站 `http://account.for-test.cn` 没有有效 HTTPS 证书，站点上 HTTPS 后
+  音频会被 mixed-content 全部拦掉。需迁对象存储或用 nginx 从本地目录伺服。
+- **SSE 不能被缓冲**：`deploy/nginx.conf` 对两个流式端点关了 `proxy_buffering`。
+  若换别的反代，务必照做，否则 AI 对话会变成"整段才出现"。
 
 ---
 

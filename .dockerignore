@@ -1,0 +1,33 @@
+# 防止 .env 等敏感文件被 COPY 进镜像（.env 里有 DEEPSEEK_API_KEY / JWT_SECRET / DB_PASSWORD）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# 版本库与本地环境
+.git
+.gitignore
+.venv
+__pycache__/
+*.py[cod]
+*.egg-info
+.pytest_cache/
+.idea/
+.factory/
+.claude/
+.DS_Store
+
+# 前端由 nginx 阶段单独构建，后端镜像不需要
+node_modules/
+frontend/
+student/
+
+# 本地数据产物：题库源 JSON 和爬虫 cookie，运行时不用（API 只读 MySQL）
+data/
+
+# 文档与测试
+docs/
+tests/
+README.md
+*.md

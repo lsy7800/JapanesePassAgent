@@ -1,6 +1,8 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
+import { ArrowDown } from '@element-plus/icons-vue'
 import { getWeakPoints, getHistoryTrend, getWrongQuestions } from '../api/exam'
+import { collapseEnter, collapseLeave } from '../utils/collapse'
 
 // ── 薄弱点 ──
 const weakPoints = ref([])
@@ -104,7 +106,15 @@ function barColor(rate) {
       <div v-if="!weakPoints.length && !weakLoading" class="empty-hint">
         暂无数据，完成并提交考试后自动统计
       </div>
-      <div v-for="w in weakPoints" :key="w.point" class="bar-row">
+      <!-- 逐条错开生长，Top 10 依次铺开比一次性全出更易读。
+           延迟写成自定义属性 --d：CSS 变量会继承，行和条内的 .bar-fill
+           都能读到同一个值，不必两处各写一遍 -->
+      <div
+        v-for="(w, i) in weakPoints"
+        :key="w.point"
+        class="bar-row"
+        :style="{ '--d': `${i * 45}ms` }"
+      >
         <div class="bar-label" :title="w.point">{{ w.point }}</div>
         <div class="bar-track">
           <div
@@ -135,10 +145,12 @@ function barColor(rate) {
       </div>
       <div v-else class="trend-wrap">
         <div class="trend-chart">
+          <!-- 柱子从左到右依次长起来；--d 见 .bar-row 处的说明 -->
           <div
-            v-for="p in history"
+            v-for="(p, i) in history"
             :key="p.exam_id"
             class="trend-col"
+            :style="{ '--d': `${Math.min(i, 12) * 40}ms` }"
             :title="`${p.date}  ${p.level}  ${p.score}/${p.total}  ${p.accuracy}%`"
           >
             <div class="trend-bar-outer">
@@ -192,35 +204,44 @@ function barColor(rate) {
             {{ item.level }}
           </el-tag>
           <span class="wrong-content">{{ item.content }}</span>
-          <el-icon class="expand-icon">
-            <component :is="expanded.has(item.group_id) ? 'ArrowUp' : 'ArrowDown'" />
+          <!-- 固定用 ArrowDown 靠 CSS 旋转 180°，比互换 ArrowUp/ArrowDown 两个组件更顺滑
+               （组件替换是新建元素，无法过渡） -->
+          <el-icon class="expand-icon" :class="{ open: expanded.has(item.group_id) }">
+            <ArrowDown />
           </el-icon>
         </div>
 
-        <div v-if="expanded.has(item.group_id)" class="wrong-detail">
-          <div class="options-grid">
-            <div
-              v-for="(text, label) in item.options"
-              :key="label"
-              class="option-item"
-              :class="{ correct: label === item.correct_answer }"
-            >
-              <span class="option-label">{{ label.toUpperCase() }}.</span> {{ text }}
+        <!-- 展开/收起做高度过渡。内容高度不定（选项数、解析长短各异），
+             所以在 JS 钩子里量出真实高度，纯 CSS 的 max-height 猜值会让动画提前结束 -->
+        <transition name="detail" @enter="collapseEnter" @leave="collapseLeave">
+          <div v-if="expanded.has(item.group_id)" class="wrong-detail">
+            <!-- 内边距放在这一层：外层折叠到 height:0 时不能带纵向 padding，否则收不干净 -->
+            <div class="detail-inner">
+              <div class="options-grid">
+                <div
+                  v-for="(text, label) in item.options"
+                  :key="label"
+                  class="option-item"
+                  :class="{ correct: label === item.correct_answer }"
+                >
+                  <span class="option-label">{{ label.toUpperCase() }}.</span> {{ text }}
+                </div>
+              </div>
+              <div class="correct-line">正确答案：{{ item.correct_answer.toUpperCase() }}</div>
+              <div v-if="item.analysis" class="analysis-text">{{ item.analysis }}</div>
+              <div class="kp-tags">
+                <el-tag
+                  v-for="kp in item.knowledge_points"
+                  :key="kp"
+                  size="small"
+                  type="info"
+                  class="kp-tag"
+                  @click="kpFilter = kp; onKpFilter()"
+                >{{ kp }}</el-tag>
+              </div>
             </div>
           </div>
-          <div class="correct-line">正确答案：{{ item.correct_answer.toUpperCase() }}</div>
-          <div v-if="item.analysis" class="analysis-text">{{ item.analysis }}</div>
-          <div class="kp-tags">
-            <el-tag
-              v-for="kp in item.knowledge_points"
-              :key="kp"
-              size="small"
-              type="info"
-              class="kp-tag"
-              @click="kpFilter = kp; onKpFilter()"
-            >{{ kp }}</el-tag>
-          </div>
-        </div>
+        </transition>
       </div>
 
       <el-pagination
@@ -248,17 +269,25 @@ function barColor(rate) {
   font-weight: 600;
   color: #303133;
 }
-.section-card { margin-bottom: 20px; }
+/* 三张分析卡依次落位 */
+.section-card {
+  margin-bottom: 20px;
+  animation: fade-up var(--dur-slow) var(--ease-out) backwards;
+}
+.section-card:nth-of-type(2) { animation-delay: 70ms; }
+.section-card:nth-of-type(3) { animation-delay: 140ms; }
 .card-title { font-weight: 600; font-size: 15px; }
 .card-sub { font-size: 12px; color: #909399; margin-left: 8px; }
 .empty-hint { text-align: center; color: #909399; padding: 28px 0; }
 
 /* ── 薄弱点条形图 ── */
+/* --d 由模板按下标注入；这里给个 0ms 兜底，避免变量缺失时 animation-delay 失效 */
 .bar-row {
   display: flex;
   align-items: center;
   margin-bottom: 10px;
   gap: 8px;
+  animation: fade-in var(--dur-base) var(--ease-out) var(--d, 0ms) backwards;
 }
 .bar-label {
   width: 100px;
@@ -278,11 +307,20 @@ function barColor(rate) {
   border-radius: 7px;
   overflow: hidden;
 }
+/* width 由 :style 内联绑定，首次渲染初值即终值，transition 不会触发。
+   改用 scaleX 动画：终态 scaleX(1) 就是绑定的 width，与具体数值无关。
+   保留 width 的 transition，供筛选后数值变化时平滑过渡。 */
 .bar-fill {
   height: 100%;
   border-radius: 7px;
-  transition: width 0.4s;
+  transition: width var(--dur-slow) var(--ease-out);
   min-width: 4px;
+  transform-origin: left center;
+  animation: bar-grow var(--dur-slow) var(--ease-out) var(--d, 0ms) backwards;
+}
+@keyframes bar-grow {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
 }
 .bar-meta {
   width: 100px;
@@ -319,10 +357,18 @@ function barColor(rate) {
   align-items: flex-end;
   overflow: hidden;
 }
+/* 同 .bar-fill：height 由内联 style 绑定，首次渲染没有过渡起点，
+   所以用 scaleY 从底部长起来。transform-origin 取 bottom，柱子才是"往上生长"。 */
 .trend-bar-fill {
   width: 100%;
   border-radius: 4px 4px 0 0;
-  transition: height 0.4s;
+  transition: height var(--dur-slow) var(--ease-out);
+  transform-origin: center bottom;
+  animation: col-grow var(--dur-slow) var(--ease-out) var(--d, 0ms) backwards;
+}
+@keyframes col-grow {
+  from { transform: scaleY(0); }
+  to   { transform: scaleY(1); }
 }
 .trend-label { font-size: 11px; color: #606266; margin-top: 4px; }
 .trend-date {
@@ -362,7 +408,9 @@ function barColor(rate) {
   border-radius: 6px;
   margin-bottom: 10px;
   overflow: hidden;
+  transition: border-color var(--dur-base) var(--ease-out);
 }
+.wrong-item:hover { border-color: #fde68a; }
 .wrong-top {
   display: flex;
   align-items: center;
@@ -370,11 +418,12 @@ function barColor(rate) {
   cursor: pointer;
   gap: 8px;
   background: #fafafa;
-  transition: background 0.2s;
+  transition: background-color var(--dur-base) var(--ease-out);
   min-height: 44px;
 }
 .wrong-top:hover { background: #fbf9f4; }
-.wrong-top:active { background: #e0e7ff; }
+/* 原来是 #e0e7ff（蓝紫），与黑金主题不搭，改成主色淡金 */
+.wrong-top:active { background: #fef3c7; transition-duration: var(--dur-fast); }
 .level-tag { flex-shrink: 0; }
 .wrong-content {
   flex: 1;
@@ -384,13 +433,26 @@ function barColor(rate) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.expand-icon { flex-shrink: 0; color: #909399; }
+.expand-icon {
+  flex-shrink: 0;
+  color: #909399;
+  transition: transform var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out);
+}
+.expand-icon.open { transform: rotate(180deg); color: #f59e0b; }
 
+/* 高度由 collapse.js 的钩子写入内联样式，这里只负责过渡与裁剪。
+   注意 padding 移到了内层 .detail-inner —— 折叠到 height:0 时外层若带纵向 padding，
+   仍会留下 24px 的高度，收不干净。 */
 .wrong-detail {
-  padding: 12px 14px;
   border-top: 1px solid #e4e7ed;
   background: #fff;
+  overflow: hidden;
+  transition: height var(--dur-base) var(--ease-in-out),
+              opacity var(--dur-base) var(--ease-in-out);
 }
+.detail-inner { padding: 12px 14px; }
+.detail-enter-from,
+.detail-leave-to { opacity: 0; }
 .options-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -426,7 +488,10 @@ function barColor(rate) {
   margin-top: 4px;
   cursor: pointer;
   min-height: 28px;
+  transition: transform var(--dur-base) var(--ease-out),
+              border-color var(--dur-base) var(--ease-out);
 }
+.kp-tag:hover { transform: translateY(-1px); border-color: #f59e0b; }
 .wrong-pagination { margin-top: 14px; text-align: center; }
 
 /* ── 移动端 ── */

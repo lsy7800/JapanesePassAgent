@@ -62,3 +62,18 @@ SPIDER_BASE_URL = get("SPIDER_BASE_URL", "http://account.for-test.cn")
 # ========== 服务配置 ==========
 API_HOST = get("API_HOST", "0.0.0.0")
 API_PORT = int(get("API_PORT", "8000"))
+
+# 运行环境：production 时收敛 CORS、关闭 /docs 等调试出口
+ENV = (get("ENV", "development") or "development").strip().lower()
+IS_PRODUCTION = ENV == "production"
+
+# 允许的跨域来源，逗号分隔。生产必须显式配置（同域部署可留空）；
+# 未配置时只回落到本地开发端口，绝不回落成 "*"。
+_DEFAULT_DEV_ORIGINS = "http://localhost:5173,http://localhost:5174"
+
+
+def allowed_origins() -> list[str]:
+    raw = get("ALLOWED_ORIGINS")
+    if raw is None:
+        raw = "" if IS_PRODUCTION else _DEFAULT_DEV_ORIGINS
+    return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
