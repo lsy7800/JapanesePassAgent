@@ -26,7 +26,12 @@ node_modules/
 frontend/dist/
 student/dist/
 
-# 生产部署的本地产物：听力音频目录（由 nginx 挂载伺服）、TLS 证书、数据库备份
+# 生产部署的本地产物：听力音频目录（由 nginx 挂载伺服）、TLS 证书
 audio/
 deploy/certs/
+
+# 数据库备份。*.sql 也要忽略：mysqldump 出来的文件含 users 表的密码哈希，
+# 且题库 dump 有 5MB 量级，不该进版本库。
+*.sql
 *.sql.gz
+!crawler/db/schema.sql

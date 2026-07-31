@@ -105,17 +105,44 @@ docker compose -f docker-compose.prod.yml exec backend \
 
 数据库只存相对路径（如 `mp3/n1/tiku79/xxx.mp3`），不存 mp3 文件本身。
 
-**用 IP + HTTP 试运行时，可以先直接指向原源站**（保持 `VITE_AUDIO_BASE_URL` 为那个
-HTTP 地址即可）—— 站点本身是 HTTP，不存在 mixed-content 拦截问题。缺点是依赖对方
-可用性，它同时是爬虫目标站，随时可能断。
+> 🔴 **最容易踩的坑：根目录 `.env` 里的 `VITE_AUDIO_BASE_URL` 必须显式填，不能留空。**
+>
+> 本地开发能播音频，是因为 `student/.env` 里有这个变量。但那个文件被
+> `.dockerignore`（`**/.env`，防止密钥进镜像）排除了，**不进构建上下文**，
+> 容器里读不到。Vite 拿到空值后，音频路径退化成相对路径 `/mp3/...`，
+> 落到 nginx 挂载的 `./audio` 空目录 → **全部 404，且不报任何错误**。
+>
+> 本地正常、线上静默失效，这个组合很难自己想到，所以单独列出来。
 
-想自己托管音频：把文件放到宿主机 `AUDIO_DIR`（默认 `./audio`），`VITE_AUDIO_BASE_URL`
-**留空**，nginx 的 `/mp3/` 会从那里伺服。目录结构要对上 `mp3/n1/tiku79/xxx.mp3`。
+**用 IP + HTTP 试运行时**，直接指向原源站最省事 —— 站点本身是 HTTP，不存在
+mixed-content 拦截问题。在根目录 `.env` 里填：
+
+```env
+VITE_AUDIO_BASE_URL=http://account.for-test.cn
+```
+
+缺点是依赖对方可用性，它同时是爬虫目标站，随时可能断。
+
+**想自己托管音频**：把文件放到宿主机 `AUDIO_DIR`（默认 `./audio`），
+`VITE_AUDIO_BASE_URL` 才留空，nginx 的 `/mp3/` 会从那里伺服。
+目录结构要对上 `mp3/n1/tiku79/xxx.mp3`。
+
+无论哪种，改完都**必须重新构建**（Vite 把值静态内联进 JS 产物，重启容器无效）：
 
 ```bash
-# 留空构建 → 前端走根相对路径 /mp3/...
 docker compose -f docker-compose.prod.yml up -d --build nginx
 ```
+
+验证变量确实进了产物：
+
+```bash
+# 指向源站时应有输出
+docker compose -f docker-compose.prod.yml exec nginx \
+  grep -o "account\.for-test\.cn" /usr/share/nginx/html/student/assets/*.js | head -1
+```
+
+浏览器 F12 看 Network，音频请求应指向 `http://account.for-test.cn/mp3/...`，
+而不是 `http://<IP>:<端口>/mp3/...`。改完记得强制刷新（`Ctrl+Shift+R`），旧 JS 有缓存。
 
 > ⚠️ **等你上了 HTTPS 域名，这件事就变成阻塞项**：那个源站没有有效 HTTPS 证书
 > （实测 `SSL: no alternative certificate subject name matches`），HTTPS 页面加载
@@ -353,7 +380,8 @@ docker compose -f docker-compose.prod.yml logs backend | grep -c 'token=%2A' || 
 浏览器端手测（这几项脚本测不了）：
 
 - [ ] 学生端能注册、登录、组卷、提交判分
-- [ ] 听力题能播放音频
+- [ ] 听力题能播放音频（F12 看 Network，音频 URL 应指向 `VITE_AUDIO_BASE_URL`
+      配的地址；若指向 `http://<IP>:<端口>/mp3/...` 说明构建时该变量为空，见上文第 4 步）
 - [ ] AI 对话是**逐字**出现的 —— 若整段才出现，说明反代还在缓冲 SSE
 - [ ] 刷新 `/exam`、`/result/1` 等深链接不 404（SPA fallback 生效）
 
